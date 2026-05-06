@@ -90,61 +90,61 @@ Running `goshai` with no arguments (or `-help`) always prints the current config
 The user prompt can also be supplied via stdin (pipe):
 
 ```bash
-echo "Explain this code" | goshai -f main.go
-cat question.txt | goshai
+    echo "Explain this code" | goshai -f main.go
+    cat question.txt | goshai
 ```
 
 ### Examples
 
 ```bash
-# Simple question
-goshai "What is the capital of France?"
-
-# Ask about a file
-goshai -f main.go "What does this file do?"
-
-# Multiple files
-goshai -f main.go -f config.go "How do these two files relate?"
-
-# Use a named system prompt
-goshai -p coder -f main.go "Review this code"
-
-# Override server and model at runtime
-goshai -u http://localhost:11434/v1 -m llama3.2 "Explain recursion"
-
-# List available named prompts
-goshai -l
-
-# Pipe a prompt via stdin
-echo "Explain this code" | goshai -f main.go
-
-# Non-streaming mode (for servers that don't support streaming)
-goshai -n "What is 2+2?"
-
-# First-time setup: save config and create starter prompts file
-goshai -u http://localhost:11434/v1 -m llama3.2 -W
+    # Simple question
+    goshai "What is the capital of France?"
+    
+    # Ask about a file
+    goshai -f main.go "What does this file do?"
+    
+    # Multiple files
+    goshai -f main.go -f config.go "How do these two files relate?"
+    
+    # Use a named system prompt
+    goshai -p coder -f main.go "Review this code"
+    
+    # Override server and model at runtime
+    goshai -u http://localhost:11434/v1 -m llama3.2 "Explain recursion"
+    
+    # List available named prompts
+    goshai -l
+    
+    # Pipe a prompt via stdin
+    echo "Explain this code" | goshai -f main.go
+    
+    # Non-streaming mode (for servers that don't support streaming)
+    goshai -n "What is 2+2?"
+    
+    # First-time setup: save config and create starter prompts file
+    goshai -u http://localhost:11434/v1 -m llama3.2 -W
 ```
 
 When files are passed, their content is prepended to the user message as fenced code blocks:
 
 ```
-File: main.go
-```go
-package main
-...
-```
+    File: main.go
+    ```go
+    package main
+    ...
+    ```
 
-[your question]
+    [your question]
 ```
 
 ## Project structure
 
 ```
-goshai/
-├── go.mod       — module definition
-├── main.go      — flag parsing, config merging, streaming API call
-├── config.go    — Config and Prompts types, YAML loading
-└── prompt.go    — BuildMessages: assembles API message array from system prompt + files + user text
+    goshai/
+    ├── go.mod       — module definition
+    ├── main.go      — flag parsing, config merging, streaming API call
+    ├── config.go    — Config and Prompts types, YAML loading
+    └── prompt.go    — BuildMessages: assembles API message array from system prompt + files + user text
 ```
 
 ### `config.go`
