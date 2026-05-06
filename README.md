@@ -5,10 +5,12 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 ## Features
 
 - Ask questions from the terminal with a one-shot prompt
+- Pipe a prompt from stdin: `echo "question" | goshai -f file.go`
 - Include one or more files as context (`-f`)
 - Select named system prompts from a YAML file (`-p`)
 - Server URL, auth token, and model stored in a config file
 - Streams the response to stdout as tokens arrive
+- Non-streaming mode (`-n`) for servers that don't support streaming
 
 ## Installation
 
@@ -42,6 +44,7 @@ url: "http://localhost:11434/v1"   # OpenAI-compatible server base URL
 token: ""                           # auth token (empty = no auth, e.g. local Ollama)
 model: "llama3.2"                   # default model
 prompt: "default"                   # default named system prompt
+no_stream: false                    # set true for servers that don't support streaming
 ```
 
 ### `prompts.yaml`
@@ -71,6 +74,7 @@ Flags:
   -m, -model <name>   model name override
   -u, -url <url>      server URL override
   -t, -token <tok>    auth token override
+  -n, -no-stream      disable streaming (non-streaming mode)
   -l, -list           list available named prompts
   -W, -write-config   save config and create default prompts.yaml if missing
 
@@ -82,6 +86,13 @@ Current configuration:
 ```
 
 Running `goshai` with no arguments (or `-help`) always prints the current configuration block so you can verify which server and model are active.
+
+The user prompt can also be supplied via stdin (pipe):
+
+```bash
+echo "Explain this code" | goshai -f main.go
+cat question.txt | goshai
+```
 
 ### Examples
 
@@ -103,6 +114,12 @@ goshai -u http://localhost:11434/v1 -m llama3.2 "Explain recursion"
 
 # List available named prompts
 goshai -l
+
+# Pipe a prompt via stdin
+echo "Explain this code" | goshai -f main.go
+
+# Non-streaming mode (for servers that don't support streaming)
+goshai -n "What is 2+2?"
 
 # First-time setup: save config and create starter prompts file
 goshai -u http://localhost:11434/v1 -m llama3.2 -W
@@ -147,9 +164,11 @@ Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system
 2. Parses flags — each registered with both short and long form (e.g. `-u` / `-url`)
 3. Merges values: CLI flag > config file > built-in default
 4. If `-W`: writes effective config to `config.yaml`, creates `prompts.yaml` if missing, exits
-5. Calls `BuildMessages`
-6. Creates an `openai.Client` with a custom `BaseURL`
-7. Streams the response via `CreateChatCompletionStream`, printing each delta to stdout
+5. Resolves user prompt: positional args → joined string; no args + piped stdin → `io.ReadAll(os.Stdin)`
+6. Calls `BuildMessages`
+7. Creates an `openai.Client` with a custom `BaseURL`
+8. If `-n`/`-no-stream` (or `no_stream: true` in config): calls `CreateChatCompletion` and prints the full response
+9. Otherwise: streams the response via `CreateChatCompletionStream`, printing each delta to stdout
 
 ## Dependencies
 
