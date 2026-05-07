@@ -12,6 +12,7 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 - Streams the response to stdout as tokens arrive
 - Non-streaming mode (`-n`) for servers that don't support streaming
 - Session history: conversations are saved automatically and can be continued by name
+- Generate a reusable prompt from any session (`-G`)
 
 ## Installation
 
@@ -82,6 +83,7 @@ Flags:
   -s, -session <name> continue named session (default: save to 'last')
   -r, -rename <name>  rename 'last' session to a new name
   -S, -sessions       list available sessions
+  -G, -gen-prompt     generate reusable prompt from session history
 
 Current configuration:
   config:  /path/to/config.yaml
@@ -188,6 +190,35 @@ Every conversation is automatically saved to `~/.config/goshai/sessions/last.jso
 ```
 
 Session files are plain JSON in `~/.config/goshai/sessions/` and can be deleted manually when no longer needed.
+
+### Generating a reusable prompt from a session
+
+After a conversation, you can ask the model to distill it into a prompt you can reuse on other files:
+
+```bash
+    # Generate a prompt from the last session
+    goshai -G
+
+    # Generate a prompt from a named session
+    goshai -G -s review
+```
+
+The model receives the conversation history with all file contents stripped out, then produces a concise prompt that captures the task and intent — ready to paste back in as your next starting point.
+
+```bash
+    # Example workflow
+    goshai -f main.go "Review this for correctness, error handling, and Go idioms"
+    # ... conversation ...
+
+    goshai -G > my_review_prompt.txt
+    # Produces something like:
+    # "Review the provided code for correctness, error handling, and adherence
+    #  to Go idioms. Highlight bugs, missing error checks, and suggest idiomatic
+    #  rewrites where appropriate."
+
+    # Reuse it later
+    goshai -f other.go "$(cat my_review_prompt.txt)"
+```
 
 ## Implementation notes
 

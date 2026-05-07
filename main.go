@@ -34,6 +34,7 @@ func main() {
 		sessionName  string
 		renameTo     string
 		listSessions bool
+		genPrompt    bool
 	)
 
 	// Load config before flag.Parse so flag.Usage can show current settings.
@@ -67,6 +68,8 @@ func main() {
 	flag.StringVar(&renameTo, "rename", "", "rename the 'last' session to a new name and exit")
 	flag.BoolVar(&listSessions, "S", false, "list available sessions")
 	flag.BoolVar(&listSessions, "sessions", false, "list available sessions")
+	flag.BoolVar(&genPrompt, "G", false, "generate reusable prompt from session history")
+	flag.BoolVar(&genPrompt, "gen-prompt", false, "generate reusable prompt from session history")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: goshai [flags] [prompt...]\n\n")
@@ -83,6 +86,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -s, -session <name> continue named session (default: save to 'last')\n")
 		fmt.Fprintf(os.Stderr, "  -r, -rename <name>  rename 'last' session to a new name\n")
 		fmt.Fprintf(os.Stderr, "  -S, -sessions       list available sessions\n")
+		fmt.Fprintf(os.Stderr, "  -G, -gen-prompt     generate reusable prompt from session history\n")
 		fmt.Fprintf(os.Stderr, "\nCurrent configuration:\n")
 		fmt.Fprintf(os.Stderr, "  config:  %s\n", configFilePath(dir, "config.yaml"))
 		fmt.Fprintf(os.Stderr, "  prompts: %s\n", configFilePath(dir, "prompts.yaml"))
@@ -201,6 +205,45 @@ func main() {
 	}
 	if model == "" {
 		log.Fatal("no model configured; use -m flag or set model in config.yaml")
+	}
+
+	if genPrompt {
+		name := defaultSessionName
+		if sessionName != "" {
+			name = sessionName
+		}
+		genMsgs, err := LoadSession(name)
+		if err != nil {
+			log.Fatal("session error: ", err)
+		}
+		if len(genMsgs) == 0 {
+			log.Fatalf("session %q is empty or does not exist", name)
+		}
+		cleaned := stripFileBlocks(genMsgs)
+		metaMessages := []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: "You are an expert at distilling conversations into clear, reusable prompts.",
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: buildGenPromptRequest(cleaned),
+			},
+		}
+		oaiCfg := openai.DefaultConfig(token)
+		oaiCfg.BaseURL = serverURL
+		client := openai.NewClientWithConfig(oaiCfg)
+		resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+			Model:    model,
+			Messages: metaMessages,
+		})
+		if err != nil {
+			log.Fatal("API error: ", err)
+		}
+		if len(resp.Choices) > 0 {
+			fmt.Println(resp.Choices[0].Message.Content)
+		}
+		return
 	}
 
 	// Resolve user prompt: positional args take precedence; fall back to stdin if piped.
