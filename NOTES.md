@@ -24,6 +24,16 @@ Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system
 
 `buildUserContent(files, userPrompt)` is the extracted helper used by both `BuildMessages` and the session continuation path.
 
+**Prompt generation (`-G`) helpers:**
+
+`stripFileContent` removes file blocks from a message using:
+```
+(?s)File: [^\n]+\n```[^\n]*\n.*?```\n\n
+```
+The `(?s)` flag (dotall) is required because file contents span multiple lines — without it `.` would not cross newline boundaries and the match would fail. The non-greedy `.*?` prevents one file block from swallowing subsequent ones.
+
+`buildGenPromptRequest` formats the cleaned conversation as labeled `SYSTEM:` / `USER:` / `ASSISTANT:` turns and appends a fixed instruction asking the model to output *only* a reusable prompt template. Explicit role labels are used rather than sending actual role-structured messages so the model treats the whole history as passive context, not as live dialogue it is continuing.
+
 ### `session.go`
 
 Manages conversation history as JSON files under `~/.config/goshai/sessions/`:
@@ -40,6 +50,7 @@ Manages conversation history as JSON files under `~/.config/goshai/sessions/`:
 3. Merges values: CLI flag > config file > built-in default
 4. If `-W`: writes effective config to `config.yaml`, creates `prompts.yaml` if missing, exits
 5. If `-S`: lists sessions and exits; if `-r`: renames `last` and exits; if `-P`: lists prompts and exits; if `-M`: lists models via API and exits
+5. If `-G`: loads session (named or `last`), strips file blocks, calls the model non-streaming with a meta-prompt, prints generated prompt and exits — positioned *after* URL/model validation but *before* the user-prompt/file requirement check, since `-G` needs neither
 6. Resolves user prompt: positional args → joined string; no args + piped stdin → `io.ReadAll(os.Stdin)`
 7. Assembles messages: loads named session history if `-s` given, otherwise builds fresh via `BuildMessages`
 8. Creates an `openai.Client` with a custom `BaseURL`
