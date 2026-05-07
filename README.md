@@ -49,6 +49,13 @@ prompt: "default"                  # default named system prompt
 nostream: false                    # set true for servers that don't support streaming
 ```
 
+String values (`url`, `token`, `model`, `prompt`) support environment variable expansion using `$VAR` or `${VAR}` syntax. This is useful for keeping secrets out of the config file:
+
+```yaml
+token: ${OPENAI_API_KEY}
+url: ${LLM_SERVER_URL}
+```
+
 ### `prompts.yaml`
 
 A map of named system prompts. Running `-W` creates this file automatically if it does not exist yet:

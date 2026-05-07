@@ -13,7 +13,7 @@ goshai/
 
 ### `config.go`
 
-Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system prompt string). Provides `LoadConfig`, `LoadPrompts` (missing file = zero value, not an error), `SaveConfig` (writes the effective config), and `SaveDefaultPrompts` (creates `prompts.yaml` only if it does not already exist).
+Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system prompt string). Provides `LoadConfig`, `LoadPrompts` (missing file = zero value, not an error), `SaveConfig` (writes the effective config), and `SaveDefaultPrompts` (creates `prompts.yaml` only if it does not already exist). After YAML parsing, `LoadConfig` expands environment variables in all string fields via `os.ExpandEnv`, so values like `${OPENAI_API_KEY}` are resolved at load time.
 
 ### `prompt.go`
 

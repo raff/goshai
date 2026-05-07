@@ -61,6 +61,10 @@ func LoadConfig() (Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, err
 	}
+	cfg.URL = os.ExpandEnv(cfg.URL)
+	cfg.Token = os.ExpandEnv(cfg.Token)
+	cfg.Model = os.ExpandEnv(cfg.Model)
+	cfg.Prompt = os.ExpandEnv(cfg.Prompt)
 	return cfg, nil
 }
 
