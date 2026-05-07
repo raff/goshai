@@ -11,6 +11,7 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 - Server URL, auth token, and model stored in a config file
 - Streams the response to stdout as tokens arrive
 - Non-streaming mode (`-n`) for servers that don't support streaming
+- Session history: conversations are saved automatically and can be continued by name
 
 ## Installation
 
@@ -77,6 +78,9 @@ Flags:
   -n, -no-stream      disable streaming (non-streaming mode)
   -l, -list           list available named prompts
   -W, -write-config   save config and create default prompts.yaml if missing
+  -s, -session <name> continue named session (default: save to 'last')
+  -r, -rename <name>  rename 'last' session to a new name
+  -S, -sessions       list available sessions
 
 Current configuration:
   config:  /path/to/config.yaml
@@ -138,6 +142,49 @@ When files are passed, their content is prepended to the user message as fenced 
     [your question]
 ```
 
+## Sessions
+
+Every conversation is automatically saved to `~/.config/goshai/sessions/last.json` when it completes. You can name, continue, and manage sessions with a few flags.
+
+### Continuing a conversation
+
+```bash
+    # First question — saved to 'last' automatically
+    goshai -f main.go "What does this file do?"
+
+    # Follow-up — the file content is already in the history, no need to re-pass -f
+    goshai -s last "Can you suggest a better name for the main function?"
+
+    # Or name the session up front and use it throughout
+    goshai -s review -f main.go "What does this file do?"
+    goshai -s review "Can you suggest a better name for the main function?"
+    goshai -s review "What about error handling?"
+```
+
+### Recovering a forgotten session
+
+```bash
+    # You forgot to pass -s but want to continue the last conversation:
+    goshai -s last "Actually, one more question..."
+
+    # Or rename 'last' to keep it before starting something new:
+    goshai -r myreview
+    goshai "Completely unrelated question"   # saved to 'last' again
+```
+
+### Managing sessions
+
+```bash
+    # List all saved sessions
+    goshai -S
+
+    # Output:
+    #   last                   4 messages  2026-05-06 14:30
+    #   myreview               6 messages  2026-05-06 12:15
+```
+
+Session files are plain JSON in `~/.config/goshai/sessions/` and can be deleted manually when no longer needed.
+
 ## Project structure
 
 ```
@@ -145,7 +192,8 @@ When files are passed, their content is prepended to the user message as fenced 
     ├── go.mod       — module definition
     ├── main.go      — flag parsing, config merging, streaming API call
     ├── config.go    — Config and Prompts types, YAML loading
-    └── prompt.go    — BuildMessages: assembles API message array from system prompt + files + user text
+    ├── prompt.go    — BuildMessages: assembles API message array from system prompt + files + user text
+    └── session.go   — session load/save/list/rename, stored in ~/.config/goshai/sessions/
 ```
 
 ### `config.go`
@@ -159,17 +207,30 @@ Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system
 1. Optional system message if `systemPrompt` is non-empty
 2. User message with each file rendered as a fenced code block (language hint from extension), followed by the user's question
 
+`buildUserContent(files, userPrompt)` is the extracted helper used by both `BuildMessages` and the session continuation path.
+
+### `session.go`
+
+Manages conversation history as JSON files under `~/.config/goshai/sessions/`:
+
+- `LoadSession(name)` — reads history; returns nil for a new session
+- `SaveSession(name, messages)` — writes history with 0o600 permissions
+- `ListSessions()` — returns name, message count, and modification time for each session
+- `RenameSession(from, to)` — renames a session file; errors if the target already exists
+
 ### `main.go`
 
 1. Loads config early (before `flag.Parse`) so `flag.Usage` can show the current URL, model, and config file paths
 2. Parses flags — each registered with both short and long form (e.g. `-u` / `-url`)
 3. Merges values: CLI flag > config file > built-in default
 4. If `-W`: writes effective config to `config.yaml`, creates `prompts.yaml` if missing, exits
-5. Resolves user prompt: positional args → joined string; no args + piped stdin → `io.ReadAll(os.Stdin)`
-6. Calls `BuildMessages`
-7. Creates an `openai.Client` with a custom `BaseURL`
-8. If `-n`/`-no-stream` (or `nostream: true` in config): calls `CreateChatCompletion` and prints the full response
-9. Otherwise: streams the response via `CreateChatCompletionStream`, printing each delta to stdout
+5. If `-S`: lists sessions and exits; if `-r`: renames `last` and exits
+6. Resolves user prompt: positional args → joined string; no args + piped stdin → `io.ReadAll(os.Stdin)`
+7. Assembles messages: loads named session history if `-s` given, otherwise builds fresh via `BuildMessages`
+8. Creates an `openai.Client` with a custom `BaseURL`
+9. If `-n`/`-no-stream` (or `nostream: true` in config): calls `CreateChatCompletion` and prints the full response
+10. Otherwise: streams the response via `CreateChatCompletionStream`, printing each delta to stdout
+11. Appends the assistant reply and saves the session (to the named session or `last`)
 
 ## Dependencies
 

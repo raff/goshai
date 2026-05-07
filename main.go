@@ -22,14 +22,17 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 func main() {
 	var (
-		files       multiFlag
-		promptName  string
-		model       string
-		serverURL   string
-		token       string
-		listPrompts bool
-		writeConfig bool
-		noStream    bool
+		files        multiFlag
+		promptName   string
+		model        string
+		serverURL    string
+		token        string
+		listPrompts  bool
+		writeConfig  bool
+		noStream     bool
+		sessionName  string
+		renameTo     string
+		listSessions bool
 	)
 
 	// Load config before flag.Parse so flag.Usage can show current settings.
@@ -55,6 +58,12 @@ func main() {
 	flag.BoolVar(&noStream, "no-stream", false, "disable streaming (non-streaming mode)")
 	flag.BoolVar(&writeConfig, "W", false, "write current configuration to config.yaml and create default prompts.yaml")
 	flag.BoolVar(&writeConfig, "write-config", false, "write current configuration to config.yaml and create default prompts.yaml")
+	flag.StringVar(&sessionName, "s", "", "session name to continue (creates if new); omit to start fresh and save to 'last'")
+	flag.StringVar(&sessionName, "session", "", "session name to continue (creates if new); omit to start fresh and save to 'last'")
+	flag.StringVar(&renameTo, "r", "", "rename the 'last' session to a new name and exit")
+	flag.StringVar(&renameTo, "rename", "", "rename the 'last' session to a new name and exit")
+	flag.BoolVar(&listSessions, "S", false, "list available sessions")
+	flag.BoolVar(&listSessions, "sessions", false, "list available sessions")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: goshai [flags] [prompt...]\n\n")
@@ -67,6 +76,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -n, -no-stream      disable streaming\n")
 		fmt.Fprintf(os.Stderr, "  -l, -list           list available named prompts\n")
 		fmt.Fprintf(os.Stderr, "  -W, -write-config   save config and create default prompts.yaml if missing\n")
+		fmt.Fprintf(os.Stderr, "  -s, -session <name> continue named session (default: save to 'last')\n")
+		fmt.Fprintf(os.Stderr, "  -r, -rename <name>  rename 'last' session to a new name\n")
+		fmt.Fprintf(os.Stderr, "  -S, -sessions       list available sessions\n")
 		fmt.Fprintf(os.Stderr, "\nCurrent configuration:\n")
 		fmt.Fprintf(os.Stderr, "  config:  %s\n", configFilePath(dir, "config.yaml"))
 		fmt.Fprintf(os.Stderr, "  prompts: %s\n", configFilePath(dir, "prompts.yaml"))
@@ -80,6 +92,29 @@ func main() {
 	prompts, err := LoadPrompts()
 	if err != nil {
 		log.Fatal("prompts error: ", err)
+	}
+
+	if listSessions {
+		sessions, err := ListSessions()
+		if err != nil {
+			log.Fatal("sessions error: ", err)
+		}
+		if len(sessions) == 0 {
+			fmt.Println("(no sessions saved)")
+			return
+		}
+		for _, s := range sessions {
+			fmt.Printf("  %-20s  %3d messages  %s\n", s.Name, s.Messages, s.Modified.Format("2006-01-02 15:04"))
+		}
+		return
+	}
+
+	if renameTo != "" {
+		if err := RenameSession(defaultSessionName, renameTo); err != nil {
+			log.Fatal("rename error: ", err)
+		}
+		fmt.Printf("renamed '%s' → '%s'\n", defaultSessionName, renameTo)
+		return
 	}
 
 	if listPrompts {
@@ -168,9 +203,37 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: prompt %q not found, proceeding without system prompt\n", promptName)
 	}
 
-	messages, err := BuildMessages(systemPrompt, files, userPrompt)
-	if err != nil {
-		log.Fatal(err)
+	// Determine which session to save to; load history if continuing a named session.
+	saveAs := defaultSessionName
+	var messages []openai.ChatCompletionMessage
+
+	if sessionName != "" {
+		saveAs = sessionName
+		messages, err = LoadSession(sessionName)
+		if err != nil {
+			log.Fatal("session error: ", err)
+		}
+		// New named session: prepend system prompt if one was resolved.
+		if len(messages) == 0 && systemPrompt != "" {
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: systemPrompt,
+			})
+		}
+		userContent, err := buildUserContent(files, userPrompt)
+		if err != nil {
+			log.Fatal(err)
+		}
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: userContent,
+		})
+	} else {
+		// No session flag: start fresh, will be saved to "last".
+		messages, err = BuildMessages(systemPrompt, files, userPrompt)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	oaiCfg := openai.DefaultConfig(token)
@@ -189,7 +252,15 @@ func main() {
 			log.Fatal("API error: ", err)
 		}
 		if len(resp.Choices) > 0 {
-			fmt.Println(resp.Choices[0].Message.Content)
+			content := resp.Choices[0].Message.Content
+			fmt.Println(content)
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleAssistant,
+				Content: content,
+			})
+			if err := SaveSession(saveAs, messages); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
+			}
 		}
 		return
 	}
@@ -207,6 +278,7 @@ func main() {
 	}
 	defer stream.Close()
 
+	var sb strings.Builder
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -216,8 +288,18 @@ func main() {
 			log.Fatal("stream error: ", err)
 		}
 		if len(resp.Choices) > 0 {
-			fmt.Print(resp.Choices[0].Delta.Content)
+			chunk := resp.Choices[0].Delta.Content
+			fmt.Print(chunk)
+			sb.WriteString(chunk)
 		}
 	}
 	fmt.Println()
+
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleAssistant,
+		Content: sb.String(),
+	})
+	if err := SaveSession(saveAs, messages); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
+	}
 }

@@ -34,6 +34,23 @@ var extToLang = map[string]string{
 	".toml": "toml",
 }
 
+// buildUserContent assembles the user message content: file blocks followed by the prompt.
+func buildUserContent(files []string, userPrompt string) (string, error) {
+	var sb strings.Builder
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		lang := extToLang[strings.ToLower(filepath.Ext(path))]
+		fmt.Fprintf(&sb, "File: %s\n```%s\n%s\n```\n\n", filepath.Base(path), lang, string(data))
+	}
+	if userPrompt != "" {
+		sb.WriteString(userPrompt)
+	}
+	return sb.String(), nil
+}
+
 // BuildMessages assembles the messages slice for the API call.
 // File contents are prepended to userPrompt as fenced code blocks.
 func BuildMessages(systemPrompt string, files []string, userPrompt string) ([]openai.ChatCompletionMessage, error) {
@@ -46,22 +63,13 @@ func BuildMessages(systemPrompt string, files []string, userPrompt string) ([]op
 		})
 	}
 
-	var sb strings.Builder
-	for _, path := range files {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		lang := extToLang[strings.ToLower(filepath.Ext(path))]
-		fmt.Fprintf(&sb, "File: %s\n```%s\n%s\n```\n\n", filepath.Base(path), lang, string(data))
+	content, err := buildUserContent(files, userPrompt)
+	if err != nil {
+		return nil, err
 	}
-	if userPrompt != "" {
-		sb.WriteString(userPrompt)
-	}
-
 	msgs = append(msgs, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
-		Content: sb.String(),
+		Content: content,
 	})
 
 	return msgs, nil
