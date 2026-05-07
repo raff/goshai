@@ -72,6 +72,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  prompts: %s\n", configFilePath(dir, "prompts.yaml"))
 		fmt.Fprintf(os.Stderr, "  url:     %s\n", strOrDefault(cfg.URL, "(not set)"))
 		fmt.Fprintf(os.Stderr, "  model:   %s\n", strOrDefault(cfg.Model, "(not set)"))
+		fmt.Fprintf(os.Stderr, "  stream:  %v\n", !cfg.NoStream)
 	}
 
 	flag.Parse()

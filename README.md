@@ -41,10 +41,10 @@ goshai -u http://localhost:11434/v1 -m llama3.2 -W
 
 ```yaml
 url: "http://localhost:11434/v1"   # OpenAI-compatible server base URL
-token: ""                           # auth token (empty = no auth, e.g. local Ollama)
-model: "llama3.2"                   # default model
-prompt: "default"                   # default named system prompt
-no_stream: false                    # set true for servers that don't support streaming
+token: ""                          # auth token (empty = no auth, e.g. local Ollama)
+model: "llama3.2"                  # default model
+prompt: "default"                  # default named system prompt
+nostream: false                    # set true for servers that don't support streaming
 ```
 
 ### `prompts.yaml`
@@ -83,6 +83,7 @@ Current configuration:
   prompts: /path/to/prompts.yaml
   url:     http://localhost:11434/v1
   model:   llama3.2
+  stream:  true
 ```
 
 Running `goshai` with no arguments (or `-help`) always prints the current configuration block so you can verify which server and model are active.
@@ -167,7 +168,7 @@ Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system
 5. Resolves user prompt: positional args → joined string; no args + piped stdin → `io.ReadAll(os.Stdin)`
 6. Calls `BuildMessages`
 7. Creates an `openai.Client` with a custom `BaseURL`
-8. If `-n`/`-no-stream` (or `no_stream: true` in config): calls `CreateChatCompletion` and prints the full response
+8. If `-n`/`-no-stream` (or `nostream: true` in config): calls `CreateChatCompletion` and prints the full response
 9. Otherwise: streams the response via `CreateChatCompletionStream`, printing each delta to stdout
 
 ## Dependencies

@@ -14,7 +14,7 @@ type Config struct {
 	Token    string `yaml:"token"`
 	Model    string `yaml:"model"`
 	Prompt   string `yaml:"prompt"`
-	NoStream bool   `yaml:"no_stream,omitempty"`
+	NoStream bool   `yaml:"nostream,omitempty"`
 }
 
 // Prompts maps named system prompts from ~/.config/goshai/prompts.yaml.
