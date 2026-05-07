@@ -13,6 +13,7 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 - Non-streaming mode (`-n`) for servers that don't support streaming
 - Session history: conversations are saved automatically and can be continued by name
 - Generate a reusable prompt from any session (`-G`)
+- Named environments in a single config file for switching between servers (`-e`, `-E`)
 
 ## Installation
 
@@ -41,6 +42,10 @@ goshai -u http://localhost:11434/v1 -m llama3.2 -W
 
 ### `config.yaml`
 
+The config file supports two formats.
+
+**Single environment (legacy):**
+
 ```yaml
 url: "http://localhost:11434/v1"   # OpenAI-compatible server base URL
 token: ""                          # auth token (empty = no auth, e.g. local Ollama)
@@ -49,12 +54,27 @@ prompt: "default"                  # default named system prompt
 nostream: false                    # set true for servers that don't support streaming
 ```
 
-String values (`url`, `token`, `model`, `prompt`) support environment variable expansion using `$VAR` or `${VAR}` syntax. This is useful for keeping secrets out of the config file:
+**Multiple named environments:**
 
 ```yaml
-token: ${OPENAI_API_KEY}
-url: ${LLM_SERVER_URL}
+local:
+  url: "http://localhost:11434/v1"
+  model: "llama3.2"
+
+remote:
+  url: "https://api.openai.com/v1"
+  token: "${OPENAI_API_KEY}"
+  model: "gpt-4o"
+
+work:
+  url: "${WORK_LLM_URL}"
+  token: "${WORK_LLM_TOKEN}"
+  model: "claude-3-5-sonnet"
 ```
+
+When using named environments, select one with `-e <name>`. If `-e` is omitted, the first entry in the file is used as the default. Use `-E` to list all configured environments.
+
+String values (`url`, `token`, `model`, `prompt`) support environment variable expansion using `$VAR` or `${VAR}` syntax, useful for keeping secrets out of the config file.
 
 ### `prompts.yaml`
 
@@ -84,6 +104,8 @@ Flags:
   -u, -url <url>      server URL override
   -t, -token <tok>    auth token override
   -n, -no-stream      disable streaming (non-streaming mode)
+  -e, -env <name>     select named environment from config
+  -E, -envs           list configured environments
   -P, -prompts        list available named prompts
   -M, -models         list available models (requires server URL)
   -W, -write-config   save config and create default prompts.yaml if missing
@@ -141,6 +163,15 @@ The user prompt can also be supplied via stdin (pipe):
     
     # First-time setup: save config and create starter prompts file
     goshai -u http://localhost:11434/v1 -m llama3.2 -W
+
+    # List configured environments
+    goshai -E
+
+    # Use a named environment
+    goshai -e remote "What is the capital of France?"
+
+    # Save current flags as a named environment
+    goshai -e local -u http://localhost:11434/v1 -m llama3.2 -W
 ```
 
 When files are passed, their content is prepended to the user message as fenced code blocks:

@@ -133,7 +133,7 @@ func TestLoadConfig_missingFile(t *testing.T) {
 	os.Setenv("HOME", tmp)
 	defer os.Setenv("HOME", orig)
 
-	cfg, err := LoadConfig()
+	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Fatal("expected no error for missing config, got:", err)
 	}

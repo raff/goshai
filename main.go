@@ -20,6 +20,23 @@ type multiFlag []string
 func (m *multiFlag) String() string     { return strings.Join(*m, ", ") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
+// findEnvArg scans args for the value of -e / -env before flag.Parse.
+func findEnvArg(args []string) string {
+	for i, a := range args {
+		switch {
+		case (a == "-e" || a == "-env" || a == "--env") && i+1 < len(args):
+			return args[i+1]
+		case strings.HasPrefix(a, "-e="):
+			return a[3:]
+		case strings.HasPrefix(a, "-env="):
+			return a[5:]
+		case strings.HasPrefix(a, "--env="):
+			return a[6:]
+		}
+	}
+	return ""
+}
+
 func main() {
 	var (
 		files        multiFlag
@@ -29,16 +46,22 @@ func main() {
 		token        string
 		listPrompts  bool
 		listModels   bool
+		listEnvs     bool
 		writeConfig  bool
 		noStream     bool
 		sessionName  string
 		renameTo     string
 		listSessions bool
 		genPrompt    bool
+		envName      string
 	)
 
+	// Pre-scan for -e so LoadConfig can select the right environment
+	// before flag.Parse (needed so flag.Usage shows the correct settings).
+	earlyEnv := findEnvArg(os.Args[1:])
+
 	// Load config before flag.Parse so flag.Usage can show current settings.
-	cfg, err := LoadConfig()
+	cfg, err := LoadConfig(earlyEnv)
 	if err != nil {
 		log.Fatal("config error: ", err)
 	}
@@ -70,6 +93,10 @@ func main() {
 	flag.BoolVar(&listSessions, "sessions", false, "list available sessions")
 	flag.BoolVar(&genPrompt, "G", false, "generate reusable prompt from session history")
 	flag.BoolVar(&genPrompt, "gen-prompt", false, "generate reusable prompt from session history")
+	flag.StringVar(&envName, "e", "", "environment to use (default: first in config)")
+	flag.StringVar(&envName, "env", "", "environment to use (default: first in config)")
+	flag.BoolVar(&listEnvs, "E", false, "list configured environments")
+	flag.BoolVar(&listEnvs, "envs", false, "list configured environments")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: goshai [flags] [prompt...]\n\n")
@@ -80,6 +107,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -u, -url <url>      server URL override\n")
 		fmt.Fprintf(os.Stderr, "  -t, -token <tok>    auth token override\n")
 		fmt.Fprintf(os.Stderr, "  -n, -no-stream      disable streaming\n")
+		fmt.Fprintf(os.Stderr, "  -e, -env <name>     select named environment from config\n")
+		fmt.Fprintf(os.Stderr, "  -E, -envs           list configured environments\n")
 		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
 		fmt.Fprintf(os.Stderr, "  -M, -models         list available models (requires server URL)\n")
 		fmt.Fprintf(os.Stderr, "  -W, -write-config   save config and create default prompts.yaml if missing\n")
@@ -90,12 +119,47 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\nCurrent configuration:\n")
 		fmt.Fprintf(os.Stderr, "  config:  %s\n", configFilePath(dir, "config.yaml"))
 		fmt.Fprintf(os.Stderr, "  prompts: %s\n", configFilePath(dir, "prompts.yaml"))
+		if earlyEnv != "" {
+			fmt.Fprintf(os.Stderr, "  env:     %s\n", earlyEnv)
+		}
 		fmt.Fprintf(os.Stderr, "  url:     %s\n", strOrDefault(cfg.URL, "(not set)"))
 		fmt.Fprintf(os.Stderr, "  model:   %s\n", strOrDefault(cfg.Model, "(not set)"))
 		fmt.Fprintf(os.Stderr, "  stream:  %v\n", !cfg.NoStream)
 	}
 
 	flag.Parse()
+
+	if listEnvs {
+		envs, err := ListConfigs()
+		if err != nil {
+			log.Fatal("config error: ", err)
+		}
+		if len(envs) == 0 {
+			fmt.Println("(no environments configured)")
+			return
+		}
+		for i, e := range envs {
+			name := e.Name
+			if name == "" {
+				name = "(default)"
+			}
+			marker := "  "
+			if i == 0 {
+				marker = "* "
+			}
+			fmt.Printf("%s%-20s  %-40s  %s\n", marker, name, strOrDefault(e.URL, "(no url)"), strOrDefault(e.Model, "(no model)"))
+		}
+		return
+	}
+
+	// If -e was specified after flag.Parse but differs from the pre-scanned value,
+	// reload the config for the correct environment.
+	if envName != earlyEnv {
+		cfg, err = LoadConfig(envName)
+		if err != nil {
+			log.Fatal("config error: ", err)
+		}
+	}
 
 	prompts, err := LoadPrompts()
 	if err != nil {
@@ -163,6 +227,7 @@ func main() {
 
 	if writeConfig {
 		effective := Config{
+			Name:     envName,
 			URL:      serverURL,
 			Token:    token,
 			Model:    model,
