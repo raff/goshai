@@ -28,6 +28,7 @@ func main() {
 		serverURL    string
 		token        string
 		listPrompts  bool
+		listModels   bool
 		writeConfig  bool
 		noStream     bool
 		sessionName  string
@@ -52,8 +53,10 @@ func main() {
 	flag.StringVar(&serverURL, "url", "", "server URL override")
 	flag.StringVar(&token, "t", "", "auth token override")
 	flag.StringVar(&token, "token", "", "auth token override")
-	flag.BoolVar(&listPrompts, "l", false, "list available named prompts")
-	flag.BoolVar(&listPrompts, "list", false, "list available named prompts")
+	flag.BoolVar(&listPrompts, "P", false, "list available named prompts")
+	flag.BoolVar(&listPrompts, "prompts", false, "list available named prompts")
+	flag.BoolVar(&listModels, "M", false, "list available models (requires server URL)")
+	flag.BoolVar(&listModels, "models", false, "list available models (requires server URL)")
 	flag.BoolVar(&noStream, "n", false, "disable streaming (non-streaming mode)")
 	flag.BoolVar(&noStream, "no-stream", false, "disable streaming (non-streaming mode)")
 	flag.BoolVar(&writeConfig, "W", false, "write current configuration to config.yaml and create default prompts.yaml")
@@ -74,7 +77,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -u, -url <url>      server URL override\n")
 		fmt.Fprintf(os.Stderr, "  -t, -token <tok>    auth token override\n")
 		fmt.Fprintf(os.Stderr, "  -n, -no-stream      disable streaming\n")
-		fmt.Fprintf(os.Stderr, "  -l, -list           list available named prompts\n")
+		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
+		fmt.Fprintf(os.Stderr, "  -M, -models         list available models (requires server URL)\n")
 		fmt.Fprintf(os.Stderr, "  -W, -write-config   save config and create default prompts.yaml if missing\n")
 		fmt.Fprintf(os.Stderr, "  -s, -session <name> continue named session (default: save to 'last')\n")
 		fmt.Fprintf(os.Stderr, "  -r, -rename <name>  rename 'last' session to a new name\n")
@@ -166,6 +170,28 @@ func main() {
 		}
 		if err := SaveDefaultPrompts(); err != nil {
 			log.Fatal("write prompts error: ", err)
+		}
+		return
+	}
+
+	if listModels {
+		if serverURL == "" {
+			log.Fatal("no server URL configured; use -u flag or set url in config.yaml")
+		}
+		oaiCfg := openai.DefaultConfig(token)
+		oaiCfg.BaseURL = serverURL
+		client := openai.NewClientWithConfig(oaiCfg)
+		modelList, err := client.ListModels(context.Background())
+		if err != nil {
+			log.Fatal("models error: ", err)
+		}
+		models := make([]string, 0, len(modelList.Models))
+		for _, m := range modelList.Models {
+			models = append(models, m.ID)
+		}
+		sort.Strings(models)
+		for _, id := range models {
+			fmt.Println(" ", id)
 		}
 		return
 	}
