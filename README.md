@@ -6,7 +6,8 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 
 - Ask questions from the terminal with a one-shot prompt
 - Pipe a prompt from stdin: `echo "question" | goshai -f file.go`
-- Include one or more files as context (`-f`)
+- Include one or more files as context (`-f`): source files embedded as fenced blocks, images as base64 data URIs
+- Embed files inline at any position in your prompt using `@filename` syntax
 - Select named system prompts from a YAML file (`-p`)
 - Server URL, auth token, and model stored in a config file
 - Streams the response to stdout as tokens arrive
@@ -143,6 +144,15 @@ The user prompt can also be supplied via stdin (pipe):
     # Multiple files
     goshai -f main.go -f config.go "How do these two files relate?"
     
+    # Ask about an image (vision-capable model required)
+    goshai -f screenshot.png "What error is shown in this screenshot?"
+
+    # Mix image and code context
+    goshai -f diagram.png -f main.go "Does the code match the architecture diagram?"
+
+    # Inline @filename — embed files at a specific position in the prompt
+    goshai "The error appears in @screenshot.png, here is the source @main.go — what's wrong?"
+
     # Use a named system prompt
     goshai -p coder -f main.go "Review this code"
     
@@ -174,7 +184,28 @@ The user prompt can also be supplied via stdin (pipe):
     goshai -e local -u http://localhost:11434/v1 -m llama3.2 -W
 ```
 
-When files are passed, their content is prepended to the user message as fenced code blocks:
+### File context
+
+**`-f` flag** — files are prepended before the user prompt. Text files become fenced code blocks; image files (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`) are base64-encoded and sent as `image_url` parts, which vision-capable models can read:
+
+```bash
+    # Ask about an image
+    goshai -f screenshot.png "What error is shown?"
+
+    # Mix text and image context
+    goshai -f main.go -f diagram.png "Does the code match the diagram?"
+```
+
+**`@filename` syntax** — embed a file inline at any position in your prompt, rather than always at the top. Useful for natural phrasing:
+
+```bash
+    goshai "Look at @screenshot.png — the relevant code is @main.go. What's wrong?"
+    goshai "Compare @old.go with @new.go and summarize the changes"
+```
+
+Quoted form for paths with spaces: `@"my file.txt"`. If the path doesn't resolve to an existing file, the `@token` is left as literal text (no error).
+
+Text files passed via `-f` are embedded as fenced code blocks:
 
 ```
     File: main.go

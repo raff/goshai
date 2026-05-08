@@ -354,14 +354,11 @@ func main() {
 				Content: systemPrompt,
 			})
 		}
-		userContent, err := buildUserContent(files, userPrompt)
+		userMsg, err := buildUserMessage(files, userPrompt)
 		if err != nil {
 			log.Fatal(err)
 		}
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: userContent,
-		})
+		messages = append(messages, userMsg)
 	} else {
 		// No session flag: start fresh, will be saved to "last".
 		messages, err = BuildMessages(systemPrompt, files, userPrompt)

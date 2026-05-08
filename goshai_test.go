@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,6 +124,194 @@ func TestBuildMessages_missingFile(t *testing.T) {
 	_, err := BuildMessages("", []string{"/nonexistent/path/file.go"}, "question")
 	if err == nil {
 		t.Error("expected error for missing file, got nil")
+	}
+}
+
+func TestBuildMessages_imageFile(t *testing.T) {
+	dir := t.TempDir()
+	imgPath := filepath.Join(dir, "shot.png")
+	imgData := []byte("fakepngbytes")
+	if err := os.WriteFile(imgPath, imgData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msgs, err := BuildMessages("", []string{imgPath}, "what do you see?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("want 1 message, got %d", len(msgs))
+	}
+	msg := msgs[0]
+	if msg.Content != "" {
+		t.Errorf("expected empty Content when image present, got %q", msg.Content)
+	}
+	if len(msg.MultiContent) == 0 {
+		t.Fatal("expected MultiContent parts, got none")
+	}
+	var foundImage, foundText bool
+	for _, part := range msg.MultiContent {
+		if part.Type == openai.ChatMessagePartTypeImageURL {
+			foundImage = true
+			want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgData)
+			if part.ImageURL == nil || part.ImageURL.URL != want {
+				t.Errorf("unexpected image URL: %v", part.ImageURL)
+			}
+		}
+		if part.Type == openai.ChatMessagePartTypeText && strings.Contains(part.Text, "what do you see?") {
+			foundText = true
+		}
+	}
+	if !foundImage {
+		t.Error("expected image_url part")
+	}
+	if !foundText {
+		t.Error("expected text part with user prompt")
+	}
+}
+
+func TestBuildMessages_mixedTextAndImage(t *testing.T) {
+	dir := t.TempDir()
+	goPath := filepath.Join(dir, "main.go")
+	imgPath := filepath.Join(dir, "shot.png")
+	os.WriteFile(goPath, []byte("package main"), 0o644)
+	os.WriteFile(imgPath, []byte("fakepng"), 0o644)
+
+	msgs, err := BuildMessages("", []string{goPath, imgPath}, "explain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := msgs[0]
+	if len(msg.MultiContent) == 0 {
+		t.Fatal("expected MultiContent for mixed files")
+	}
+	var textParts, imageParts int
+	for _, part := range msg.MultiContent {
+		switch part.Type {
+		case openai.ChatMessagePartTypeText:
+			textParts++
+		case openai.ChatMessagePartTypeImageURL:
+			imageParts++
+		}
+	}
+	if textParts == 0 {
+		t.Error("expected at least one text part")
+	}
+	if imageParts != 1 {
+		t.Errorf("expected 1 image part, got %d", imageParts)
+	}
+}
+
+func TestBuildMessages_pdfError(t *testing.T) {
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "doc.pdf")
+	os.WriteFile(pdfPath, []byte("%PDF-1.4"), 0o644)
+
+	_, err := BuildMessages("", []string{pdfPath}, "summarize")
+	if err == nil {
+		t.Error("expected error for PDF file, got nil")
+	}
+	if !strings.Contains(err.Error(), "PDF") {
+		t.Errorf("expected PDF error message, got: %v", err)
+	}
+}
+
+func TestParseInlineRefs_noRefs(t *testing.T) {
+	segs := parseInlineRefs("hello world")
+	if len(segs) != 1 || segs[0].text != "hello world" {
+		t.Errorf("unexpected segments: %+v", segs)
+	}
+}
+
+func TestParseInlineRefs_nonExistentRef(t *testing.T) {
+	segs := parseInlineRefs("please @mention me")
+	if len(segs) != 1 || segs[0].text != "please @mention me" {
+		t.Errorf("non-existent @ref should be kept as literal text, got: %+v", segs)
+	}
+}
+
+func TestParseInlineRefs_existingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "code.go")
+	os.WriteFile(path, []byte("package main"), 0o644)
+
+	prompt := "review " + path + " please"
+	// Use @path form
+	prompt = "review @" + path + " please"
+	segs := parseInlineRefs(prompt)
+
+	var found bool
+	for _, seg := range segs {
+		if seg.filePath == path {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected file segment for %s, got: %+v", path, segs)
+	}
+}
+
+func TestBuildMessages_inlineTextRef(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "util.go")
+	os.WriteFile(path, []byte("package util"), 0o644)
+
+	msgs, err := BuildMessages("", nil, "check @"+path+" for bugs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := msgs[0]
+	// Text-only: should use Content string, not MultiContent
+	if msg.MultiContent != nil {
+		t.Error("expected Content string for text-only inline ref, got MultiContent")
+	}
+	if !strings.Contains(msg.Content, "File: util.go") {
+		t.Errorf("expected file block in content, got: %s", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "for bugs") {
+		t.Errorf("expected trailing text in content, got: %s", msg.Content)
+	}
+}
+
+func TestBuildMessages_inlineImageRef(t *testing.T) {
+	dir := t.TempDir()
+	imgPath := filepath.Join(dir, "err.png")
+	imgData := []byte("pngdata")
+	os.WriteFile(imgPath, imgData, 0o644)
+
+	msgs, err := BuildMessages("", nil, "look at @"+imgPath+" what's wrong?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := msgs[0]
+	if len(msg.MultiContent) == 0 {
+		t.Fatal("expected MultiContent for inline image ref")
+	}
+	var foundImage bool
+	for _, part := range msg.MultiContent {
+		if part.Type == openai.ChatMessagePartTypeImageURL {
+			foundImage = true
+		}
+	}
+	if !foundImage {
+		t.Error("expected image_url part for @image.png")
+	}
+}
+
+func TestStripFileBlocks_multiContent(t *testing.T) {
+	parts := []openai.ChatMessagePart{
+		{Type: openai.ChatMessagePartTypeText, Text: "File: x.go\n```go\npackage x\n```\n\nsome question"},
+		{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,abc"}},
+	}
+	msgs := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, MultiContent: parts},
+	}
+	stripped := stripFileBlocks(msgs)
+	if stripped[0].MultiContent != nil {
+		t.Error("MultiContent should be collapsed after stripping")
+	}
+	if stripped[0].Content != "some question" {
+		t.Errorf("unexpected stripped content: %q", stripped[0].Content)
 	}
 }
 

@@ -7,7 +7,7 @@ goshai/
 ├── go.mod       — module definition
 ├── main.go      — flag parsing, config merging, streaming API call
 ├── config.go    — Config and Prompts types, YAML loading
-├── prompt.go    — BuildMessages: assembles API message array from system prompt + files + user text
+├── prompt.go    — BuildMessages: assembles API messages; handles text files, images, and @filename inline refs
 └── session.go   — session load/save/list/rename, stored in ~/.config/goshai/sessions/
 ```
 
@@ -20,9 +20,16 @@ Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system
 `BuildMessages(systemPrompt, files, userPrompt)` builds the `[]ChatCompletionMessage` slice:
 
 1. Optional system message if `systemPrompt` is non-empty
-2. User message with each file rendered as a fenced code block (language hint from extension), followed by the user's question
+2. User message via `buildUserMessage` (see below)
 
-`buildUserContent(files, userPrompt)` is the extracted helper used by both `BuildMessages` and the session continuation path.
+`buildUserMessage(files, userPrompt)` assembles the user `ChatCompletionMessage`. It handles two paths:
+
+- **Text-only** (all files are source/text): produces a `Content` string with files as fenced code blocks, followed by the prompt — fully backward-compatible with any OpenAI-compatible server.
+- **Mixed or image-only** (any file has an image extension): produces a `MultiContent []ChatMessagePart` message. Text files become `text` parts (same fenced-block format), image files (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`) become `image_url` parts with a `data:<mime>;base64,<data>` URI. This is compatible with any vision-capable server.
+
+**`@filename` inline syntax:** `buildUserMessage` calls `parseInlineRefs(userPrompt)` which scans the prompt for `@path` and `@"quoted path"` tokens. Each token is tested with `os.Stat`; tokens that don't resolve to an existing file are left as literal text. Valid file references are substituted inline at their position in the prompt (text files as fenced blocks, images as image parts). The `-f` files are always prepended first.
+
+**PDF files** return an explicit error: `"PDF files require go-openai file-part support (not yet in v1.36.1)"`. The `"file"` content part type for inline PDFs exists in OpenAI's Chat Completions spec but is not exposed in go-openai v1.36.1.
 
 **Prompt generation (`-G`) helpers:**
 
@@ -31,6 +38,8 @@ Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system
 (?s)File: [^\n]+\n```[^\n]*\n.*?```\n\n
 ```
 The `(?s)` flag (dotall) is required because file contents span multiple lines — without it `.` would not cross newline boundaries and the match would fail. The non-greedy `.*?` prevents one file block from swallowing subsequent ones.
+
+`stripFileBlocks` now handles both `Content` string messages (regex-strip) and `MultiContent` messages (drop `image_url` parts, strip file blocks from `text` parts, collapse surviving text to a `Content` string). This ensures `-G` works on sessions that included images.
 
 `buildGenPromptRequest` formats the cleaned conversation as labeled `SYSTEM:` / `USER:` / `ASSISTANT:` turns and appends a fixed instruction asking the model to output *only* a reusable prompt template. Explicit role labels are used rather than sending actual role-structured messages so the model treats the whole history as passive context, not as live dialogue it is continuing.
 
@@ -81,4 +90,4 @@ The library defines two content part types for `ChatCompletionMessage`:
 | `ChatMessagePartTypeText` | `"text"` | plain text segment |
 | `ChatMessagePartTypeImageURL` | `"image_url"` | image via URL or base64 data URI |
 
-A `"file"` part type exists in OpenAI's Chat Completions spec (for PDFs) but is not yet in go-openai v1.36.1.
+A `"file"` part type exists in OpenAI's Chat Completions spec (for PDFs) but is not yet in go-openai v1.36.1. Images work today via `image_url` with a `data:image/<mime>;base64,<data>` URI — goshai uses this for all image extensions.
