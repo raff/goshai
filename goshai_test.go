@@ -10,6 +10,14 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+func setTempConfigHome(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	return tmp
+}
+
 func TestBuildMessages_noFiles(t *testing.T) {
 	msgs, err := BuildMessages("", nil, "hello world")
 	if err != nil {
@@ -273,6 +281,29 @@ func TestBuildMessages_inlineTextRef(t *testing.T) {
 	}
 }
 
+func TestBuildMessages_inlineRefTrailingPunctuation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "util.go")
+	if err := os.WriteFile(path, []byte("package util"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msgs, err := BuildMessages("", nil, "check @"+path+", then summarize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := msgs[0]
+	if !strings.Contains(msg.Content, "File: util.go") {
+		t.Errorf("expected file block in content, got: %s", msg.Content)
+	}
+	if !strings.Contains(msg.Content, ", then summarize") {
+		t.Errorf("expected trailing punctuation to remain as prompt text, got: %s", msg.Content)
+	}
+	if strings.Contains(msg.Content, "@"+path) {
+		t.Errorf("expected inline ref to be resolved, got: %s", msg.Content)
+	}
+}
+
 func TestBuildMessages_inlineImageRef(t *testing.T) {
 	dir := t.TempDir()
 	imgPath := filepath.Join(dir, "err.png")
@@ -298,6 +329,26 @@ func TestBuildMessages_inlineImageRef(t *testing.T) {
 	}
 }
 
+func TestStripFileBlocks_handlesEmbeddedBackticks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(path, []byte("before\n```go\nfmt.Println(\"hi\")\n```\nafter"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msgs, err := BuildMessages("", []string{path}, "summarize this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msgs[0].Content, "````markdown") {
+		t.Fatalf("expected longer markdown fence, got:\n%s", msgs[0].Content)
+	}
+	stripped := stripFileBlocks(msgs)
+	if stripped[0].Content != "summarize this" {
+		t.Errorf("unexpected stripped content: %q", stripped[0].Content)
+	}
+}
+
 func TestStripFileBlocks_multiContent(t *testing.T) {
 	parts := []openai.ChatMessagePart{
 		{Type: openai.ChatMessagePartTypeText, Text: "File: x.go\n```go\npackage x\n```\n\nsome question"},
@@ -316,11 +367,7 @@ func TestStripFileBlocks_multiContent(t *testing.T) {
 }
 
 func TestLoadConfig_missingFile(t *testing.T) {
-	// Point configDir to a temp dir with no config.yaml.
-	orig := os.Getenv("HOME")
-	tmp := t.TempDir()
-	os.Setenv("HOME", tmp)
-	defer os.Setenv("HOME", orig)
+	setTempConfigHome(t)
 
 	cfg, err := LoadConfig("")
 	if err != nil {
@@ -332,10 +379,7 @@ func TestLoadConfig_missingFile(t *testing.T) {
 }
 
 func TestLoadPrompts_missingFile(t *testing.T) {
-	orig := os.Getenv("HOME")
-	tmp := t.TempDir()
-	os.Setenv("HOME", tmp)
-	defer os.Setenv("HOME", orig)
+	setTempConfigHome(t)
 
 	p, err := LoadPrompts()
 	if err != nil {
@@ -343,5 +387,93 @@ func TestLoadPrompts_missingFile(t *testing.T) {
 	}
 	if len(p) != 0 {
 		t.Errorf("expected empty Prompts, got %v", p)
+	}
+}
+
+func TestSaveConfig_namedEnvCreatesMultiEnv(t *testing.T) {
+	setTempConfigHome(t)
+
+	err := SaveConfig(Config{
+		Name:   "local",
+		URL:    "http://localhost:11434/v1",
+		Model:  "llama3.2",
+		Prompt: "default",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "local" || cfg.URL != "http://localhost:11434/v1" || cfg.Model != "llama3.2" {
+		t.Fatalf("unexpected loaded config: %+v", cfg)
+	}
+
+	configs, err := ListConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) != 1 || configs[0].Name != "local" {
+		t.Fatalf("expected one named env, got %+v", configs)
+	}
+}
+
+func TestSaveConfig_namedEnvConvertsLegacyConfig(t *testing.T) {
+	setTempConfigHome(t)
+
+	if err := SaveConfig(Config{URL: "http://legacy", Model: "old", Prompt: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveConfig(Config{Name: "remote", URL: "https://api.example/v1", Model: "new", Prompt: "default"}); err != nil {
+		t.Fatal(err)
+	}
+
+	configs, err := ListConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) != 2 {
+		t.Fatalf("expected legacy plus remote envs, got %+v", configs)
+	}
+	if configs[0].Name != "default" || configs[0].URL != "http://legacy" {
+		t.Fatalf("legacy config was not preserved as default: %+v", configs[0])
+	}
+	if configs[1].Name != "remote" || configs[1].URL != "https://api.example/v1" {
+		t.Fatalf("remote config was not appended: %+v", configs[1])
+	}
+}
+
+func TestLoadConfig_missingNamedEnv(t *testing.T) {
+	setTempConfigHome(t)
+
+	if err := SaveConfig(Config{Name: "local", URL: "http://localhost", Model: "llama3.2"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig("missing")
+	if err == nil {
+		t.Fatal("expected missing env error")
+	}
+	if !isEnvNotFound(err) {
+		t.Fatalf("expected EnvNotFoundError, got %T: %v", err, err)
+	}
+}
+
+func TestSessionNameRejectsTraversal(t *testing.T) {
+	setTempConfigHome(t)
+
+	err := SaveSession("../escape", []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hello"},
+	})
+	if err == nil {
+		t.Fatal("expected invalid session name error")
+	}
+	if !strings.Contains(err.Error(), "invalid session name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := LoadSession("../escape"); err == nil {
+		t.Fatal("expected invalid session name error from LoadSession")
 	}
 }

@@ -196,30 +196,44 @@ The user prompt can also be supplied via stdin (pipe):
     goshai -f main.go -f diagram.png "Does the code match the diagram?"
 ```
 
-**`@filename` syntax** — embed a file inline at any position in your prompt, rather than always at the top. Useful for natural phrasing:
+**`@filename` syntax** — embed a file exactly where it appears in your prompt, instead of prepending it with `-f`. This is useful when order matters, such as comparing two files or pointing from a screenshot to the relevant source:
 
 ```bash
     goshai "Look at @screenshot.png — the relevant code is @main.go. What's wrong?"
     goshai "Compare @old.go with @new.go and summarize the changes"
+    goshai "Review @cmd/server.go, then check @cmd/routes.go"
+    goshai 'Review @"docs/design draft.md"'
 ```
 
-Quoted form for paths with spaces: `@"my file.txt"`. If the path doesn't resolve to an existing file, the `@token` is left as literal text (no error).
+Resolution rules:
+
+- `@path` is resolved against the current working directory unless it is an absolute path.
+- Unquoted refs end at whitespace. Common trailing punctuation such as `,` or `.` is kept as prompt text when the file resolves without it.
+- Use `@"path with spaces.txt"` for paths containing spaces, or whenever you want the path boundary to be explicit.
+- If the path does not resolve to an existing file, the original `@token` is left as literal prompt text.
+- Text files become fenced code blocks; image files become `image_url` parts, the same as with `-f`.
 
 Text files passed via `-f` are embedded as fenced code blocks:
 
+````text
+File: main.go
+```go
+package main
+...
 ```
-    File: main.go
-    ```go
-    package main
-    ...
-    ```
 
-    [your question]
-```
+[your question]
+````
+
+goshai chooses a fence long enough for the file content, so Markdown files that already contain triple backticks remain intact.
 
 ## Sessions
 
-Every conversation is automatically saved to `~/.config/goshai/sessions/last.json` when it completes. You can name, continue, and manage sessions with a few flags.
+Every conversation is automatically saved to `sessions/last.json` under the platform config directory when it completes. You can name, continue, and manage sessions with a few flags.
+
+Session files contain the full conversation history sent to the model, including text file contents and base64 image data added with `-f` or `@filename`. The session directory is private to your user account and session JSON files are written with owner-only permissions, but you should still treat them as sensitive and delete old sessions when they are no longer needed.
+
+Session names cannot be empty and cannot contain path separators (`/` or `\`). Quote names with spaces in your shell, for example `goshai -s "code review" "next question"`.
 
 ### Continuing a conversation
 
@@ -258,7 +272,7 @@ Every conversation is automatically saved to `~/.config/goshai/sessions/last.jso
     #   myreview               6 messages  2026-05-06 12:15
 ```
 
-Session files are plain JSON in `~/.config/goshai/sessions/` and can be deleted manually when no longer needed.
+Session files are plain JSON in the `sessions/` subdirectory of the platform config directory and can be deleted manually when no longer needed.
 
 ### Generating a reusable prompt from a session
 

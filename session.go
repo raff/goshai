@@ -21,7 +21,20 @@ func sessionsDir() (string, error) {
 	return filepath.Join(dir, "sessions"), nil
 }
 
+func validateSessionName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("session name cannot be empty")
+	}
+	if name == "." || name == ".." || strings.ContainsAny(name, `/\`) || strings.ContainsRune(name, 0) {
+		return fmt.Errorf("invalid session name %q; path separators are not allowed", name)
+	}
+	return nil
+}
+
 func sessionPath(name string) (string, error) {
+	if err := validateSessionName(name); err != nil {
+		return "", err
+	}
 	dir, err := sessionsDir()
 	if err != nil {
 		return "", err
@@ -49,12 +62,13 @@ func LoadSession(name string) ([]openai.ChatCompletionMessage, error) {
 	return messages, nil
 }
 
-// SaveSession writes session messages to ~/.config/goshai/sessions/<name>.json.
+// SaveSession writes session messages to the platform config sessions directory.
 func SaveSession(name string, messages []openai.ChatCompletionMessage) error {
-	dir, err := sessionsDir()
+	path, err := sessionPath(name)
 	if err != nil {
 		return err
 	}
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -62,7 +76,7 @@ func SaveSession(name string, messages []openai.ChatCompletionMessage) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, name+".json"), data, 0o600)
+	return os.WriteFile(path, data, 0o600)
 }
 
 // SessionInfo holds display metadata for a session.
@@ -95,7 +109,10 @@ func ListSessions() ([]SessionInfo, error) {
 		if err != nil {
 			continue
 		}
-		msgs, _ := LoadSession(name)
+		msgs, err := LoadSession(name)
+		if err != nil {
+			continue
+		}
 		sessions = append(sessions, SessionInfo{
 			Name:     name,
 			Messages: len(msgs),

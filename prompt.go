@@ -11,9 +11,6 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// fileBlockRe matches "File: ...\n```lang\n...content...\n```\n\n" blocks embedded in user messages.
-var fileBlockRe = regexp.MustCompile("(?s)File: [^\n]+\n```[^\n]*\n.*?```\n\n")
-
 // inlineRefRe matches @"quoted path" or @unquoted-token in prompt text.
 var inlineRefRe = regexp.MustCompile(`@"([^"]+)"|@(\S+)`)
 
@@ -71,8 +68,29 @@ func textFileBlock(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	content := string(data)
 	lang := extToLang[strings.ToLower(filepath.Ext(path))]
-	return fmt.Sprintf("File: %s\n```%s\n%s\n```\n\n", filepath.Base(path), lang, string(data)), nil
+	fence := codeFenceForContent(content)
+	return fmt.Sprintf("File: %s\n%s%s\n%s\n%s\n\n", filepath.Base(path), fence, lang, content, fence), nil
+}
+
+func codeFenceForContent(content string) string {
+	maxRun := 0
+	run := 0
+	for _, r := range content {
+		if r == '`' {
+			run++
+			if run > maxRun {
+				maxRun = run
+			}
+			continue
+		}
+		run = 0
+	}
+	if maxRun < 3 {
+		return "```"
+	}
+	return strings.Repeat("`", maxRun+1)
 }
 
 // promptSegment is a piece of the user prompt: either literal text or a resolved file reference.
@@ -81,8 +99,24 @@ type promptSegment struct {
 	filePath string
 }
 
-// parseInlineRefs splits prompt into text/file-ref segments. @tokens that don't resolve to an
-// existing file are kept as literal text.
+func resolveInlineRef(raw string, quoted bool) (filePath, suffix string, ok bool) {
+	if _, err := os.Stat(raw); err == nil {
+		return raw, "", true
+	}
+	if quoted {
+		return "", "", false
+	}
+	trimmed := strings.TrimRight(raw, ".,;:!?)]}")
+	if trimmed != raw {
+		if _, err := os.Stat(trimmed); err == nil {
+			return trimmed, raw[len(trimmed):], true
+		}
+	}
+	return "", "", false
+}
+
+// parseInlineRefs splits prompt into text/file-ref segments. @tokens that don't
+// resolve to an existing file are kept as literal text.
 func parseInlineRefs(prompt string) []promptSegment {
 	if prompt == "" {
 		return nil
@@ -90,20 +124,26 @@ func parseInlineRefs(prompt string) []promptSegment {
 	var segs []promptSegment
 	lastEnd := 0
 	for _, m := range inlineRefRe.FindAllStringSubmatchIndex(prompt, -1) {
-		var filePath string
+		var raw string
+		quoted := false
 		if m[2] >= 0 {
-			filePath = prompt[m[2]:m[3]] // quoted form
+			raw = prompt[m[2]:m[3]] // quoted form
+			quoted = true
 		} else {
-			filePath = prompt[m[4]:m[5]] // unquoted form
+			raw = prompt[m[4]:m[5]] // unquoted form
 		}
-		if _, err := os.Stat(filePath); err != nil {
-			// File doesn't exist — treat the whole token as literal text.
+		filePath, suffix, ok := resolveInlineRef(raw, quoted)
+		if !ok {
+			// File doesn't exist; treat the whole token as literal text.
 			continue
 		}
 		if m[0] > lastEnd {
 			segs = append(segs, promptSegment{text: prompt[lastEnd:m[0]]})
 		}
 		segs = append(segs, promptSegment{filePath: filePath})
+		if suffix != "" {
+			segs = append(segs, promptSegment{text: suffix})
+		}
 		lastEnd = m[1]
 	}
 	if lastEnd < len(prompt) {
@@ -234,9 +274,80 @@ func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionM
 	}, nil
 }
 
+func fenceMarker(line string) (string, bool) {
+	if !strings.HasPrefix(line, "```") {
+		return "", false
+	}
+	i := 0
+	for i < len(line) && line[i] == '`' {
+		i++
+	}
+	if i < 3 {
+		return "", false
+	}
+	return line[:i], true
+}
+
+func findClosingFence(content string, start int, fence string) (int, bool) {
+	for pos := start; pos < len(content); {
+		lineEnd := strings.IndexByte(content[pos:], '\n')
+		next := len(content)
+		end := len(content)
+		if lineEnd >= 0 {
+			end = pos + lineEnd
+			next = end + 1
+		}
+		line := strings.TrimSuffix(content[pos:end], "\r")
+		if line == fence {
+			return next, true
+		}
+		pos = next
+	}
+	return 0, false
+}
+
 // stripFileContent removes embedded file blocks from a single message content string.
 func stripFileContent(content string) string {
-	return strings.TrimSpace(fileBlockRe.ReplaceAllString(content, ""))
+	var sb strings.Builder
+	pos := 0
+	for pos < len(content) {
+		idx := strings.Index(content[pos:], "File: ")
+		if idx < 0 {
+			sb.WriteString(content[pos:])
+			break
+		}
+		start := pos + idx
+		headerEndRel := strings.IndexByte(content[start:], '\n')
+		if headerEndRel < 0 {
+			sb.WriteString(content[pos:])
+			break
+		}
+		fenceStart := start + headerEndRel + 1
+		fenceEndRel := strings.IndexByte(content[fenceStart:], '\n')
+		if fenceEndRel < 0 {
+			sb.WriteString(content[pos:])
+			break
+		}
+		fenceLine := strings.TrimSuffix(content[fenceStart:fenceStart+fenceEndRel], "\r")
+		fence, ok := fenceMarker(fenceLine)
+		if !ok {
+			sb.WriteString(content[pos:fenceStart])
+			pos = fenceStart
+			continue
+		}
+		bodyStart := fenceStart + fenceEndRel + 1
+		end, ok := findClosingFence(content, bodyStart, fence)
+		if !ok {
+			sb.WriteString(content[pos:])
+			break
+		}
+		if strings.HasPrefix(content[end:], "\n") {
+			end++
+		}
+		sb.WriteString(content[pos:start])
+		pos = end
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 // stripFileBlocks returns a copy of the message slice with file blocks and images removed from

@@ -62,8 +62,12 @@ func main() {
 
 	// Load config before flag.Parse so flag.Usage can show current settings.
 	cfg, err := LoadConfig(earlyEnv)
+	var earlyConfigErr error
 	if err != nil {
-		log.Fatal("config error: ", err)
+		if !isEnvNotFound(err) {
+			log.Fatal("config error: ", err)
+		}
+		earlyConfigErr = err
 	}
 	dir, _ := configDir() // best-effort; empty string if unavailable
 
@@ -129,6 +133,10 @@ func main() {
 
 	flag.Parse()
 
+	if earlyConfigErr != nil && !writeConfig && !listEnvs {
+		log.Fatal("config error: ", earlyConfigErr)
+	}
+
 	if listEnvs {
 		envs, err := ListConfigs()
 		if err != nil {
@@ -157,8 +165,14 @@ func main() {
 	if envName != earlyEnv {
 		cfg, err = LoadConfig(envName)
 		if err != nil {
-			log.Fatal("config error: ", err)
+			if writeConfig && isEnvNotFound(err) {
+				cfg = Config{Name: envName}
+			} else {
+				log.Fatal("config error: ", err)
+			}
 		}
+	} else if earlyConfigErr != nil && writeConfig {
+		cfg = Config{Name: envName}
 	}
 
 	prompts, err := LoadPrompts()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,20 @@ type Config struct {
 
 // Prompts maps named system prompts from ~/.config/goshai/prompts.yaml.
 type Prompts map[string]string
+
+// EnvNotFoundError reports that a named environment was requested but absent.
+type EnvNotFoundError struct {
+	Name string
+}
+
+func (e EnvNotFoundError) Error() string {
+	return fmt.Sprintf("environment %q not found in config", e.Name)
+}
+
+func isEnvNotFound(err error) bool {
+	var notFound EnvNotFoundError
+	return errors.As(err, &notFound)
+}
 
 func configDir() (string, error) {
 	base, err := os.UserConfigDir()
@@ -117,7 +132,7 @@ func marshalMultiEnv(configs []Config) ([]byte, error) {
 		if err := valDoc.Encode(cfg); err != nil {
 			return nil, err
 		}
-		root.Content = append(root.Content, keyNode, valDoc.Content[0])
+		root.Content = append(root.Content, keyNode, &valDoc)
 	}
 	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
 	return yaml.Marshal(doc)
@@ -173,12 +188,12 @@ func LoadConfig(envName string) (Config, error) {
 			return cfg, nil
 		}
 	}
-	return Config{}, fmt.Errorf("environment %q not found in config", envName)
+	return Config{}, EnvNotFoundError{Name: envName}
 }
 
 // SaveConfig writes the effective configuration to ~/.config/goshai/config.yaml.
-// If the existing file uses multi-env format and cfg.Name is set, that named
-// environment is updated (or appended if new). Otherwise saves in single-env format.
+// Named configs are saved in multi-env format and update or append that env.
+// Unnamed configs are saved in legacy single-env format.
 func SaveConfig(cfg Config) error {
 	dir, err := configDir()
 	if err != nil {
@@ -189,32 +204,50 @@ func SaveConfig(cfg Config) error {
 	}
 	path := filepath.Join(dir, "config.yaml")
 
-	// If named env and existing file uses multi-env format, update in place.
+	// Named environment format. Missing files create a new multi-env config; an
+	// existing multi-env file is updated in place; a legacy single-env file is
+	// preserved as "default" before appending the requested named environment.
 	if cfg.Name != "" {
+		var configs []Config
 		if existing, err := os.ReadFile(path); err == nil {
-			if configs, err := parseConfigFile(existing); err == nil && len(configs) > 0 && configs[0].Name != "" {
-				found := false
-				for i, c := range configs {
-					if c.Name == cfg.Name {
-						configs[i] = cfg
-						found = true
-						break
-					}
+			parsed, err := parseConfigFile(existing)
+			if err != nil {
+				return err
+			}
+			configs = parsed
+			if len(configs) > 0 && configs[0].Name == "" {
+				legacy := configs[0]
+				if cfg.Name == "default" {
+					configs = nil
+				} else {
+					legacy.Name = "default"
+					configs = []Config{legacy}
 				}
-				if !found {
-					configs = append(configs, cfg)
-				}
-				data, err := marshalMultiEnv(configs)
-				if err != nil {
-					return err
-				}
-				if err := os.WriteFile(path, data, 0o600); err != nil {
-					return err
-				}
-				fmt.Println("wrote", path)
-				return nil
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+
+		found := false
+		for i, c := range configs {
+			if c.Name == cfg.Name {
+				configs[i] = cfg
+				found = true
+				break
 			}
 		}
+		if !found {
+			configs = append(configs, cfg)
+		}
+		data, err := marshalMultiEnv(configs)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return err
+		}
+		fmt.Println("wrote", path)
+		return nil
 	}
 
 	// Single-env (legacy) format.
