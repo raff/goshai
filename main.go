@@ -20,21 +20,18 @@ type multiFlag []string
 func (m *multiFlag) String() string     { return strings.Join(*m, ", ") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
-// findEnvArg scans args for the value of -e / -env before flag.Parse.
-func findEnvArg(args []string) string {
-	for i, a := range args {
-		switch {
-		case (a == "-e" || a == "-env" || a == "--env") && i+1 < len(args):
-			return args[i+1]
-		case strings.HasPrefix(a, "-e="):
-			return a[3:]
-		case strings.HasPrefix(a, "-env="):
-			return a[5:]
-		case strings.HasPrefix(a, "--env="):
-			return a[6:]
-		}
-	}
-	return ""
+// getEnvArg get the value of -e/--env from args without parsing all flags
+// (to select the right config environment before flag.Parse).
+func getEnvArg(args []string) string {
+	var envName string
+
+	efs := flag.NewFlagSet("early", flag.ContinueOnError)
+	efs.SetOutput(io.Discard) // suppress error output
+	efs.StringVar(&envName, "e", "", "environment to use (default: first in config)")
+	efs.StringVar(&envName, "env", "", "environment to use (default: first in config)")
+	_ = efs.Parse(args)
+
+	return envName
 }
 
 func main() {
@@ -58,7 +55,7 @@ func main() {
 
 	// Pre-scan for -e so LoadConfig can select the right environment
 	// before flag.Parse (needed so flag.Usage shows the correct settings).
-	earlyEnv := findEnvArg(os.Args[1:])
+	earlyEnv := getEnvArg(os.Args[1:])
 
 	// Load config before flag.Parse so flag.Usage can show current settings.
 	cfg, err := LoadConfig(earlyEnv)
