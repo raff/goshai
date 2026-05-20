@@ -15,6 +15,8 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 - Session history: conversations are saved automatically and can be continued by name
 - Generate a reusable prompt from any session (`-G`)
 - Named environments in a single config file for switching between servers (`-e`, `-E`)
+- Model aliases: define short names for long model IDs and manage them from the CLI (`-a`, `-A`)
+- Fuzzy model matching: pass a prefix or substring to `-m` and goshai resolves the full model name from the server's list
 
 ## Installation
 
@@ -77,6 +79,26 @@ When using named environments, select one with `-e <name>`. If `-e` is omitted, 
 
 String values (`url`, `token`, `model`, `prompt`) support environment variable expansion using `$VAR` or `${VAR}` syntax, useful for keeping secrets out of the config file.
 
+**Model aliases** can be added as a top-level `aliases:` block in `config.yaml`. Aliases are global — they apply regardless of which environment is selected:
+
+```yaml
+aliases:
+  llama: "llama3.2:latest"
+  mini: "gpt-4o-mini"
+  o1: "o1-preview"
+
+local:
+  url: "http://localhost:11434/v1"
+  model: "llama3.2:latest"
+
+remote:
+  url: "https://api.openai.com/v1"
+  token: "${OPENAI_API_KEY}"
+  model: "gpt-4o"
+```
+
+Use `-a alias=model-name` to add or update an alias without editing the file directly, and `-A` to list all configured aliases.
+
 ### `prompts.yaml`
 
 A map of named system prompts. Running `-W` creates this file automatically if it does not exist yet:
@@ -101,7 +123,7 @@ goshai [flags] [prompt...]
 Flags:
   -f, -file <path>    file to include as context (repeatable)
   -p, -prompt <name>  named system prompt
-  -m, -model <name>   model name override
+  -m, -model <name>   model name, alias, or prefix (fuzzy-matched against server list)
   -u, -url <url>      server URL override
   -t, -token <tok>    auth token override
   -n, -no-stream      disable streaming (non-streaming mode)
@@ -109,6 +131,8 @@ Flags:
   -E, -envs           list configured environments
   -P, -prompts        list available named prompts
   -M, -models         list available models (requires server URL)
+  -A, -aliases        list model aliases
+  -a, -alias <k=v>    set a model alias (e.g. -a mini=gpt-4o-mini)
   -W, -write-config   save config and create default prompts.yaml if missing
   -s, -session <name> continue named session (default: save to 'last')
   -r, -rename <name>  rename 'last' session to a new name
@@ -182,6 +206,19 @@ The user prompt can also be supplied via stdin (pipe):
 
     # Save current flags as a named environment
     goshai -e local -u http://localhost:11434/v1 -m llama3.2 -W
+
+    # Add a model alias
+    goshai -a mini=gpt-4o-mini
+    goshai -a llama=llama3.2:latest
+
+    # List configured aliases
+    goshai -A
+
+    # Use an alias with -m
+    goshai -m mini "Summarize this"
+
+    # Fuzzy model match — resolves to the first model whose name starts with "llama"
+    goshai -m llama "What is the capital of France?"
 ```
 
 ### File context

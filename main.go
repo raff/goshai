@@ -34,6 +34,46 @@ func getEnvArg(args []string) string {
 	return envName
 }
 
+// fuzzyMatchModel fetches the model list from the server and returns the best
+// match for input using prefix then substring matching (case-insensitive).
+// Returns ("", false) when no candidate is found.
+func fuzzyMatchModel(ctx context.Context, client *openai.Client, input string) (string, bool) {
+	modelList, err := client.ListModels(ctx)
+	if err != nil {
+		return "", false
+	}
+
+	inputLower := strings.ToLower(input)
+	var prefixMatches, containsMatches []string
+
+	for _, m := range modelList.Models {
+		idLower := strings.ToLower(m.ID)
+		if idLower == inputLower {
+			return m.ID, true
+		}
+		if strings.HasPrefix(idLower, inputLower) {
+			prefixMatches = append(prefixMatches, m.ID)
+		} else if strings.Contains(idLower, inputLower) {
+			containsMatches = append(containsMatches, m.ID)
+		}
+	}
+
+	candidates := prefixMatches
+	if len(candidates) == 0 {
+		candidates = containsMatches
+	}
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	sort.Strings(candidates)
+	if len(candidates) > 1 {
+		fmt.Fprintf(os.Stderr, "warning: %q matches multiple models: %s; using %q\n",
+			input, strings.Join(candidates, ", "), candidates[0])
+	}
+	return candidates[0], true
+}
+
 func main() {
 	var (
 		files        multiFlag
@@ -44,6 +84,8 @@ func main() {
 		listPrompts  bool
 		listModels   bool
 		listEnvs     bool
+		listAliases  bool
+		setAlias     string
 		writeConfig  bool
 		noStream     bool
 		sessionName  string
@@ -72,8 +114,8 @@ func main() {
 	flag.Var(&files, "file", "file to include as context (repeatable)")
 	flag.StringVar(&promptName, "p", "", "named system prompt")
 	flag.StringVar(&promptName, "prompt", "", "named system prompt")
-	flag.StringVar(&model, "m", "", "model name override")
-	flag.StringVar(&model, "model", "", "model name override")
+	flag.StringVar(&model, "m", "", "model name override (alias or prefix supported)")
+	flag.StringVar(&model, "model", "", "model name override (alias or prefix supported)")
 	flag.StringVar(&serverURL, "u", "", "server URL override")
 	flag.StringVar(&serverURL, "url", "", "server URL override")
 	flag.StringVar(&token, "t", "", "auth token override")
@@ -82,6 +124,10 @@ func main() {
 	flag.BoolVar(&listPrompts, "prompts", false, "list available named prompts")
 	flag.BoolVar(&listModels, "M", false, "list available models (requires server URL)")
 	flag.BoolVar(&listModels, "models", false, "list available models (requires server URL)")
+	flag.BoolVar(&listAliases, "A", false, "list model aliases")
+	flag.BoolVar(&listAliases, "aliases", false, "list model aliases")
+	flag.StringVar(&setAlias, "a", "", "set a model alias (format: alias=model-name)")
+	flag.StringVar(&setAlias, "alias", "", "set a model alias (format: alias=model-name)")
 	flag.BoolVar(&noStream, "n", false, "disable streaming (non-streaming mode)")
 	flag.BoolVar(&noStream, "no-stream", false, "disable streaming (non-streaming mode)")
 	flag.BoolVar(&writeConfig, "W", false, "write current configuration to config.yaml and create default prompts.yaml")
@@ -104,7 +150,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fmt.Fprintf(os.Stderr, "  -f, -file <path>    file to include as context (repeatable)\n")
 		fmt.Fprintf(os.Stderr, "  -p, -prompt <name>  named system prompt\n")
-		fmt.Fprintf(os.Stderr, "  -m, -model <name>   model name override\n")
+		fmt.Fprintf(os.Stderr, "  -m, -model <name>   model name, alias, or prefix\n")
 		fmt.Fprintf(os.Stderr, "  -u, -url <url>      server URL override\n")
 		fmt.Fprintf(os.Stderr, "  -t, -token <tok>    auth token override\n")
 		fmt.Fprintf(os.Stderr, "  -n, -no-stream      disable streaming\n")
@@ -112,6 +158,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -E, -envs           list configured environments\n")
 		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
 		fmt.Fprintf(os.Stderr, "  -M, -models         list available models (requires server URL)\n")
+		fmt.Fprintf(os.Stderr, "  -A, -aliases        list model aliases\n")
+		fmt.Fprintf(os.Stderr, "  -a, -alias <k=v>    set a model alias (e.g. -a mini=gpt-4o-mini)\n")
 		fmt.Fprintf(os.Stderr, "  -W, -write-config   save config and create default prompts.yaml if missing\n")
 		fmt.Fprintf(os.Stderr, "  -s, -session <name> continue named session (default: save to 'last')\n")
 		fmt.Fprintf(os.Stderr, "  -r, -rename <name>  rename 'last' session to a new name\n")
@@ -216,7 +264,45 @@ func main() {
 		return
 	}
 
+	if listAliases {
+		aliases, err := LoadAliases()
+		if err != nil {
+			log.Fatal("aliases error: ", err)
+		}
+		if len(aliases) == 0 {
+			fmt.Println("(no aliases configured)")
+			return
+		}
+		names := make([]string, 0, len(aliases))
+		for k := range aliases {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Printf("  %-20s %s\n", name, aliases[name])
+		}
+		return
+	}
+
+	if setAlias != "" {
+		parts := strings.SplitN(setAlias, "=", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			log.Fatal("alias format must be alias=model-name (e.g. -a mini=gpt-4o-mini)")
+		}
+		aliases, err := LoadAliases()
+		if err != nil {
+			log.Fatal("aliases error: ", err)
+		}
+		aliases[parts[0]] = parts[1]
+		if err := SaveAliases(aliases); err != nil {
+			log.Fatal("save aliases error: ", err)
+		}
+		fmt.Printf("alias %q → %q saved\n", parts[0], parts[1])
+		return
+	}
+
 	// Merge: flag > config > default
+	modelFlag := model // remember whether -m was explicitly given
 	if serverURL == "" {
 		serverURL = cfg.URL
 	}
@@ -279,6 +365,27 @@ func main() {
 	if serverURL == "" {
 		log.Fatal("no server URL configured; use -u flag or set url in config.yaml")
 	}
+
+	// Resolve model: alias lookup first, then fuzzy match against server model list
+	// if -m was explicitly given and the alias didn't resolve it.
+	aliasResolved := false
+	if model != "" {
+		if aliases, err := LoadAliases(); err == nil {
+			if full, ok := aliases[model]; ok {
+				model = full
+				aliasResolved = true
+			}
+		}
+	}
+	if modelFlag != "" && !aliasResolved {
+		oaiCfg := openai.DefaultConfig(token)
+		oaiCfg.BaseURL = serverURL
+		client := openai.NewClientWithConfig(oaiCfg)
+		if resolved, ok := fuzzyMatchModel(context.Background(), client, model); ok {
+			model = resolved
+		}
+	}
+
 	if model == "" {
 		log.Fatal("no model configured; use -m flag or set model in config.yaml")
 	}

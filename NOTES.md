@@ -13,7 +13,9 @@ goshai/
 
 ### `config.go`
 
-Defines `Config` (URL, token, model, prompt name) and `Prompts` (name → system prompt string). Provides `LoadConfig`, `LoadPrompts` (missing file = zero value, not an error), `SaveConfig` (writes the effective config), and `SaveDefaultPrompts` (creates `prompts.yaml` only if it does not already exist). After YAML parsing, `LoadConfig` expands environment variables in all string fields via `os.ExpandEnv`, so values like `${OPENAI_API_KEY}` are resolved at load time.
+Defines `Config` (URL, token, model, prompt name), `Prompts` (name → system prompt string), and `Aliases` (short name → full model ID). Provides `LoadConfig`, `LoadPrompts`, `LoadAliases` (missing file or absent block = zero value, not an error), `SaveConfig`, `SaveAliases`, and `SaveDefaultPrompts`. After YAML parsing, `LoadConfig` expands environment variables in all string fields via `os.ExpandEnv`, so values like `${OPENAI_API_KEY}` are resolved at load time.
+
+**Aliases** are stored as a top-level `aliases:` key in `config.yaml` alongside named environments. `parseConfigFile` treats this key specially — it decodes the value as `map[string]string` rather than a `Config` and excludes it from the returned environment list, so `"aliases"` never appears as a phantom environment. `marshalMultiEnv` writes the aliases block first (sorted) when non-empty, then the environment entries. All save paths (`SaveConfig`, `SaveAliases`) round-trip the aliases through to `marshalMultiEnv` so the block is never silently dropped.
 
 Named configs (`cfg.Name != ""`) are always written in multi-env format. A new config file becomes a one-entry multi-env file, an existing multi-env file is updated or appended, and an existing legacy single-env file is preserved as a `default` environment before appending the named env.
 
@@ -62,14 +64,17 @@ Session files intentionally store the full API conversation so follow-up turns c
 2. Parses flags — each registered with both short and long form (e.g. `-u` / `-url`)
 3. Merges values: CLI flag > config file > built-in default
 4. If `-W`: writes effective config to `config.yaml`, creates `prompts.yaml` if missing, exits
-5. If `-S`: lists sessions and exits; if `-r`: renames `last` and exits; if `-P`: lists prompts and exits; if `-M`: lists models via API and exits
-6. If `-G`: loads session (named or `last`), strips file blocks, calls the model non-streaming with a meta-prompt, prints generated prompt and exits — positioned *after* URL/model validation but *before* the user-prompt/file requirement check, since `-G` needs neither
-7. Resolves user prompt: positional args → joined string; no args + piped stdin → `io.ReadAll(os.Stdin)`
-8. Assembles messages: loads named session history if `-s` given, otherwise builds fresh via `BuildMessages`
-9. Creates an `openai.Client` with a custom `BaseURL`
-10. If `-n`/`-no-stream` (or `nostream: true` in config): calls `CreateChatCompletion` and prints the full response
-11. Otherwise: streams the response via `CreateChatCompletionStream`, printing each delta to stdout
-12. Appends the assistant reply and saves the session (to the named session or `last`)
+5. If `-S`: lists sessions and exits; if `-r`: renames `last` and exits; if `-P`: lists prompts and exits; if `-M`: lists models via API and exits; if `-A`: lists aliases and exits; if `-a alias=model`: updates alias in `config.yaml` and exits
+6. **Model resolution** (when server URL is known):
+   a. Alias lookup — if the model string matches a key in `aliases`, the full model ID is substituted
+   b. Fuzzy match fallback — only when `-m` was explicitly passed *and* alias lookup did not resolve it: creates a temporary client, calls `ListModels`, and finds the best match (exact → prefix → substring, case-insensitive, sorted; warns if ambiguous). Skipped when model came from config default to avoid a network call on every invocation.
+7. If `-G`: loads session (named or `last`), strips file blocks, calls the model non-streaming with a meta-prompt, prints generated prompt and exits
+8. Resolves user prompt: positional args → joined string; no args + piped stdin → `io.ReadAll(os.Stdin)`
+9. Assembles messages: loads named session history if `-s` given, otherwise builds fresh via `BuildMessages`
+10. Creates an `openai.Client` with a custom `BaseURL`
+11. If `-n`/`-no-stream` (or `nostream: true` in config): calls `CreateChatCompletion` and prints the full response
+12. Otherwise: streams the response via `CreateChatCompletionStream`, printing each delta to stdout
+13. Appends the assistant reply and saves the session (to the named session or `last`)
 
 ## OpenAI API notes
 
