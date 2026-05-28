@@ -13,12 +13,14 @@ import (
 // Config holds settings from ~/.config/goshai/config.yaml.
 // Name is the environment key (map key in the YAML); it is not written as a field.
 type Config struct {
-	Name     string `yaml:"-"`
-	URL      string `yaml:"url"`
-	Token    string `yaml:"token"`
-	Model    string `yaml:"model"`
-	Prompt   string `yaml:"prompt"`
-	NoStream bool   `yaml:"nostream,omitempty"`
+	Name           string `yaml:"-"`
+	URL            string `yaml:"url"`
+	Token          string `yaml:"token"`
+	Model          string `yaml:"model"`
+	Prompt         string `yaml:"prompt"`
+	NoStream       bool   `yaml:"nostream,omitempty"`
+	Think          bool   `yaml:"think,omitempty"`
+	ThinkingBudget int    `yaml:"thinking-budget,omitempty"`
 }
 
 // Prompts maps named system prompts from ~/.config/goshai/prompts.yaml.

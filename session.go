@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	openai "github.com/sashabaranov/go-openai"
 )
 
 const defaultSessionName = "last"
@@ -43,7 +41,7 @@ func sessionPath(name string) (string, error) {
 }
 
 // LoadSession reads a session by name; returns nil slice for a new session.
-func LoadSession(name string) ([]openai.ChatCompletionMessage, error) {
+func LoadSession(name string) ([]Message, error) {
 	path, err := sessionPath(name)
 	if err != nil {
 		return nil, err
@@ -55,7 +53,7 @@ func LoadSession(name string) ([]openai.ChatCompletionMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	var messages []openai.ChatCompletionMessage
+	var messages []Message
 	if err := json.Unmarshal(data, &messages); err != nil {
 		return nil, err
 	}
@@ -63,7 +61,7 @@ func LoadSession(name string) ([]openai.ChatCompletionMessage, error) {
 }
 
 // SaveSession writes session messages to the platform config sessions directory.
-func SaveSession(name string, messages []openai.ChatCompletionMessage) error {
+func SaveSession(name string, messages []Message) error {
 	path, err := sessionPath(name)
 	if err != nil {
 		return err

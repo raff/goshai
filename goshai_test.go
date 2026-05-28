@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	openai "github.com/sashabaranov/go-openai"
 )
 
 func setTempConfigHome(t *testing.T) string {
@@ -26,7 +24,7 @@ func TestBuildMessages_noFiles(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("want 1 message, got %d", len(msgs))
 	}
-	if msgs[0].Role != openai.ChatMessageRoleUser {
+	if msgs[0].Role != RoleUser {
 		t.Errorf("want user role, got %s", msgs[0].Role)
 	}
 	if msgs[0].Content != "hello world" {
@@ -42,7 +40,7 @@ func TestBuildMessages_withSystemPrompt(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("want 2 messages, got %d", len(msgs))
 	}
-	if msgs[0].Role != openai.ChatMessageRoleSystem {
+	if msgs[0].Role != RoleSystem {
 		t.Errorf("want system role first, got %s", msgs[0].Role)
 	}
 	if msgs[0].Content != "Be helpful." {
@@ -58,7 +56,7 @@ func TestBuildMessages_emptySystemPrompt(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("want 1 message (no system), got %d", len(msgs))
 	}
-	if msgs[0].Role != openai.ChatMessageRoleUser {
+	if msgs[0].Role != RoleUser {
 		t.Errorf("want user role, got %s", msgs[0].Role)
 	}
 }
@@ -159,14 +157,14 @@ func TestBuildMessages_imageFile(t *testing.T) {
 	}
 	var foundImage, foundText bool
 	for _, part := range msg.MultiContent {
-		if part.Type == openai.ChatMessagePartTypeImageURL {
+		if part.Type == PartTypeImageURL {
 			foundImage = true
 			want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgData)
 			if part.ImageURL == nil || part.ImageURL.URL != want {
 				t.Errorf("unexpected image URL: %v", part.ImageURL)
 			}
 		}
-		if part.Type == openai.ChatMessagePartTypeText && strings.Contains(part.Text, "what do you see?") {
+		if part.Type == PartTypeText && strings.Contains(part.Text, "what do you see?") {
 			foundText = true
 		}
 	}
@@ -196,9 +194,9 @@ func TestBuildMessages_mixedTextAndImage(t *testing.T) {
 	var textParts, imageParts int
 	for _, part := range msg.MultiContent {
 		switch part.Type {
-		case openai.ChatMessagePartTypeText:
+		case PartTypeText:
 			textParts++
-		case openai.ChatMessagePartTypeImageURL:
+		case PartTypeImageURL:
 			imageParts++
 		}
 	}
@@ -320,7 +318,7 @@ func TestBuildMessages_inlineImageRef(t *testing.T) {
 	}
 	var foundImage bool
 	for _, part := range msg.MultiContent {
-		if part.Type == openai.ChatMessagePartTypeImageURL {
+		if part.Type == PartTypeImageURL {
 			foundImage = true
 		}
 	}
@@ -350,12 +348,12 @@ func TestStripFileBlocks_handlesEmbeddedBackticks(t *testing.T) {
 }
 
 func TestStripFileBlocks_multiContent(t *testing.T) {
-	parts := []openai.ChatMessagePart{
-		{Type: openai.ChatMessagePartTypeText, Text: "File: x.go\n```go\npackage x\n```\n\nsome question"},
-		{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,abc"}},
+	parts := []MessagePart{
+		{Type: PartTypeText, Text: "File: x.go\n```go\npackage x\n```\n\nsome question"},
+		{Type: PartTypeImageURL, ImageURL: &ImageURL{URL: "data:image/png;base64,abc"}},
 	}
-	msgs := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, MultiContent: parts},
+	msgs := []Message{
+		{Role: RoleUser, MultiContent: parts},
 	}
 	stripped := stripFileBlocks(msgs)
 	if stripped[0].MultiContent != nil {
@@ -463,8 +461,8 @@ func TestLoadConfig_missingNamedEnv(t *testing.T) {
 func TestSessionNameRejectsTraversal(t *testing.T) {
 	setTempConfigHome(t)
 
-	err := SaveSession("../escape", []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "hello"},
+	err := SaveSession("../escape", []Message{
+		{Role: RoleUser, Content: "hello"},
 	})
 	if err == nil {
 		t.Fatal("expected invalid session name error")

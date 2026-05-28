@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,8 +9,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-
-	openai "github.com/sashabaranov/go-openai"
 )
 
 // multiFlag supports repeatable -f flags.
@@ -37,8 +34,8 @@ func getEnvArg(args []string) string {
 // fuzzyMatchModel fetches the model list from the server and returns the best
 // match for input using prefix then substring matching (case-insensitive).
 // Returns ("", false) when no candidate is found.
-func fuzzyMatchModel(ctx context.Context, client *openai.Client, input string) (string, bool) {
-	modelList, err := client.ListModels(ctx)
+func fuzzyMatchModel(ctx context.Context, client *Client, input string) (string, bool) {
+	models, err := client.ListModels(ctx)
 	if err != nil {
 		return "", false
 	}
@@ -46,7 +43,7 @@ func fuzzyMatchModel(ctx context.Context, client *openai.Client, input string) (
 	inputLower := strings.ToLower(input)
 	var prefixMatches, containsMatches []string
 
-	for _, m := range modelList.Models {
+	for _, m := range models {
 		idLower := strings.ToLower(m.ID)
 		if idLower == inputLower {
 			return m.ID, true
@@ -87,12 +84,14 @@ func main() {
 		listAliases  bool
 		setAlias     string
 		writeConfig  bool
-		noStream     bool
-		sessionName  string
-		renameTo     string
-		listSessions bool
-		genPrompt    bool
-		envName      string
+		noStream       bool
+		thinking       bool
+		thinkingBudget int
+		sessionName    string
+		renameTo       string
+		listSessions   bool
+		genPrompt      bool
+		envName        string
 	)
 
 	// Pre-scan for -e so LoadConfig can select the right environment
@@ -130,6 +129,8 @@ func main() {
 	flag.StringVar(&setAlias, "alias", "", "set a model alias (format: alias=model-name)")
 	flag.BoolVar(&noStream, "n", false, "disable streaming (non-streaming mode)")
 	flag.BoolVar(&noStream, "no-stream", false, "disable streaming (non-streaming mode)")
+	flag.BoolVar(&thinking, "thinking", false, "enable extended thinking / reasoning")
+	flag.IntVar(&thinkingBudget, "thinking-budget", 0, "token budget for thinking (default 10000 when thinking is enabled)")
 	flag.BoolVar(&writeConfig, "W", false, "write current configuration to config.yaml and create default prompts.yaml")
 	flag.BoolVar(&writeConfig, "write-config", false, "write current configuration to config.yaml and create default prompts.yaml")
 	flag.StringVar(&sessionName, "s", "", "session name to continue (creates if new); omit to start fresh and save to 'last'")
@@ -154,6 +155,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -u, -url <url>      server URL override\n")
 		fmt.Fprintf(os.Stderr, "  -t, -token <tok>    auth token override\n")
 		fmt.Fprintf(os.Stderr, "  -n, -no-stream      disable streaming\n")
+		fmt.Fprintf(os.Stderr, "  -thinking           enable extended thinking / reasoning\n")
+		fmt.Fprintf(os.Stderr, "  -thinking-budget N  token budget for thinking (default %d)\n", defaultThinkingBudget)
 		fmt.Fprintf(os.Stderr, "  -e, -env <name>     select named environment from config\n")
 		fmt.Fprintf(os.Stderr, "  -E, -envs           list configured environments\n")
 		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
@@ -174,6 +177,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  url:     %s\n", strOrDefault(cfg.URL, "(not set)"))
 		fmt.Fprintf(os.Stderr, "  model:   %s\n", strOrDefault(cfg.Model, "(not set)"))
 		fmt.Fprintf(os.Stderr, "  stream:  %v\n", !cfg.NoStream)
+		fmt.Fprintf(os.Stderr, "  think:   %v\n", cfg.Think)
 	}
 
 	flag.Parse()
@@ -321,15 +325,23 @@ func main() {
 	if !noStream {
 		noStream = cfg.NoStream
 	}
+	if !thinking {
+		thinking = cfg.Think
+	}
+	if thinkingBudget == 0 {
+		thinkingBudget = cfg.ThinkingBudget
+	}
 
 	if writeConfig {
 		effective := Config{
-			Name:     envName,
-			URL:      serverURL,
-			Token:    token,
-			Model:    model,
-			Prompt:   promptName,
-			NoStream: noStream,
+			Name:           envName,
+			URL:            serverURL,
+			Token:          token,
+			Model:          model,
+			Prompt:         promptName,
+			NoStream:       noStream,
+			Think:          thinking,
+			ThinkingBudget: thinkingBudget,
 		}
 		if err := SaveConfig(effective); err != nil {
 			log.Fatal("write config error: ", err)
@@ -344,20 +356,29 @@ func main() {
 		if serverURL == "" {
 			log.Fatal("no server URL configured; use -u flag or set url in config.yaml")
 		}
-		oaiCfg := openai.DefaultConfig(token)
-		oaiCfg.BaseURL = serverURL
-		client := openai.NewClientWithConfig(oaiCfg)
-		modelList, err := client.ListModels(context.Background())
+		client := NewClient(serverURL, token)
+		modelInfos, err := client.ListModels(context.Background())
 		if err != nil {
 			log.Fatal("models error: ", err)
 		}
-		models := make([]string, 0, len(modelList.Models))
-		for _, m := range modelList.Models {
-			models = append(models, m.ID)
+		// Build reverse map: full model ID → alias name
+		reverseAliases := map[string]string{}
+		if aliases, err := LoadAliases(); err == nil {
+			for alias, full := range aliases {
+				reverseAliases[full] = alias
+			}
 		}
-		sort.Strings(models)
-		for _, id := range models {
-			fmt.Println(" ", id)
+		ids := make([]string, 0, len(modelInfos))
+		for _, m := range modelInfos {
+			ids = append(ids, m.ID)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			if alias, ok := reverseAliases[id]; ok {
+				fmt.Printf("  %s (%s)\n", id, alias)
+			} else {
+				fmt.Println(" ", id)
+			}
 		}
 		return
 	}
@@ -378,9 +399,7 @@ func main() {
 		}
 	}
 	if modelFlag != "" && !aliasResolved {
-		oaiCfg := openai.DefaultConfig(token)
-		oaiCfg.BaseURL = serverURL
-		client := openai.NewClientWithConfig(oaiCfg)
+		client := NewClient(serverURL, token)
 		if resolved, ok := fuzzyMatchModel(context.Background(), client, model); ok {
 			model = resolved
 		}
@@ -403,29 +422,16 @@ func main() {
 			log.Fatalf("session %q is empty or does not exist", name)
 		}
 		cleaned := stripFileBlocks(genMsgs)
-		metaMessages := []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: "You are an expert at distilling conversations into clear, reusable prompts.",
-			},
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: buildGenPromptRequest(cleaned),
-			},
+		metaMessages := []Message{
+			{Role: RoleSystem, Content: "You are an expert at distilling conversations into clear, reusable prompts."},
+			{Role: RoleUser, Content: buildGenPromptRequest(cleaned)},
 		}
-		oaiCfg := openai.DefaultConfig(token)
-		oaiCfg.BaseURL = serverURL
-		client := openai.NewClientWithConfig(oaiCfg)
-		resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
-			Model:    model,
-			Messages: metaMessages,
-		})
+		client := NewClient(serverURL, token)
+		content, err := client.ChatCompletion(context.Background(), model, metaMessages, ChatOptions{})
 		if err != nil {
 			log.Fatal("API error: ", err)
 		}
-		if len(resp.Choices) > 0 {
-			fmt.Println(resp.Choices[0].Message.Content)
-		}
+		fmt.Println(content)
 		return
 	}
 
@@ -457,7 +463,7 @@ func main() {
 
 	// Determine which session to save to; load history if continuing a named session.
 	saveAs := defaultSessionName
-	var messages []openai.ChatCompletionMessage
+	var messages []Message
 
 	if sessionName != "" {
 		saveAs = sessionName
@@ -467,10 +473,7 @@ func main() {
 		}
 		// New named session: prepend system prompt if one was resolved.
 		if len(messages) == 0 && systemPrompt != "" {
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: systemPrompt,
-			})
+			messages = append(messages, Message{Role: RoleSystem, Content: systemPrompt})
 		}
 		userMsg, err := buildUserMessage(files, userPrompt)
 		if err != nil {
@@ -485,43 +488,23 @@ func main() {
 		}
 	}
 
-	oaiCfg := openai.DefaultConfig(token)
-	oaiCfg.BaseURL = serverURL
-	client := openai.NewClientWithConfig(oaiCfg)
+	client := NewClient(serverURL, token)
+	opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget}
 
 	if noStream {
-		resp, err := client.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model:    model,
-				Messages: messages,
-			},
-		)
+		content, err := client.ChatCompletion(context.Background(), model, messages, opts)
 		if err != nil {
 			log.Fatal("API error: ", err)
 		}
-		if len(resp.Choices) > 0 {
-			content := resp.Choices[0].Message.Content
-			fmt.Println(content)
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleAssistant,
-				Content: content,
-			})
-			if err := SaveSession(saveAs, messages); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
-			}
+		fmt.Println(content)
+		messages = append(messages, Message{Role: RoleAssistant, Content: content})
+		if err := SaveSession(saveAs, messages); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
 		}
 		return
 	}
 
-	stream, err := client.CreateChatCompletionStream(
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model:    model,
-			Messages: messages,
-			Stream:   true,
-		},
-	)
+	stream, err := client.ChatCompletionStream(context.Background(), model, messages, opts)
 	if err != nil {
 		log.Fatal("API error: ", err)
 	}
@@ -529,25 +512,19 @@ func main() {
 
 	var sb strings.Builder
 	for {
-		resp, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			log.Fatal("stream error: ", err)
 		}
-		if len(resp.Choices) > 0 {
-			chunk := resp.Choices[0].Delta.Content
-			fmt.Print(chunk)
-			sb.WriteString(chunk)
-		}
+		fmt.Print(chunk)
+		sb.WriteString(chunk)
 	}
 	fmt.Println()
 
-	messages = append(messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleAssistant,
-		Content: sb.String(),
-	})
+	messages = append(messages, Message{Role: RoleAssistant, Content: sb.String()})
 	if err := SaveSession(saveAs, messages); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
 	}

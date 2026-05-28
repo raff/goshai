@@ -12,6 +12,7 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 - Server URL, auth token, and model stored in a config file
 - Streams the response to stdout as tokens arrive
 - Non-streaming mode (`-n`) for servers that don't support streaming
+- Extended thinking / reasoning support (`-thinking`) for models that expose it
 - Session history: conversations are saved automatically and can be continued by name
 - Generate a reusable prompt from any session (`-G`)
 - Named environments in a single config file for switching between servers (`-e`, `-E`)
@@ -55,6 +56,8 @@ token: ""                          # auth token (empty = no auth, e.g. local Oll
 model: "llama3.2"                  # default model
 prompt: "default"                  # default named system prompt
 nostream: false                    # set true for servers that don't support streaming
+# think: true                      # uncomment to enable extended thinking / reasoning
+# thinking-budget: 16000           # token budget for thinking (default 10000)
 ```
 
 **Multiple named environments:**
@@ -72,7 +75,9 @@ remote:
 work:
   url: "${WORK_LLM_URL}"
   token: "${WORK_LLM_TOKEN}"
-  model: "claude-3-5-sonnet"
+  model: "claude-sonnet-4-5"
+  think: true
+  thinking-budget: 16000
 ```
 
 When using named environments, select one with `-e <name>`. If `-e` is omitted, the first entry in the file is used as the default. Use `-E` to list all configured environments.
@@ -127,6 +132,8 @@ Flags:
   -u, -url <url>      server URL override
   -t, -token <tok>    auth token override
   -n, -no-stream      disable streaming (non-streaming mode)
+  -thinking           enable extended thinking / reasoning
+  -thinking-budget N  token budget for thinking (default 10000)
   -e, -env <name>     select named environment from config
   -E, -envs           list configured environments
   -P, -prompts        list available named prompts
@@ -145,6 +152,7 @@ Current configuration:
   url:     http://localhost:11434/v1
   model:   llama3.2
   stream:  true
+  think:   false
 ```
 
 Running `goshai` with no arguments (or `-help`) always prints the current configuration block so you can verify which server and model are active.
@@ -219,6 +227,15 @@ The user prompt can also be supplied via stdin (pipe):
 
     # Fuzzy model match — resolves to the first model whose name starts with "llama"
     goshai -m llama "What is the capital of France?"
+
+    # Enable extended thinking (model must support it)
+    goshai -thinking "Solve this step by step: ..."
+
+    # Enable thinking with a custom token budget
+    goshai -thinking -thinking-budget 20000 -f problem.go "Find all edge cases"
+
+    # Save a thinking-enabled environment
+    goshai -e work -u https://api.example.com/v1 -m claude-sonnet-4-5 -thinking -W
 ```
 
 ### File context
@@ -342,9 +359,8 @@ The model receives the conversation history with all file contents stripped out,
 
 ## Implementation notes
 
-See [NOTES.md](NOTES.md) for internals: module structure, per-file design notes, and API research (file context strategies, go-openai content part types).
+See [NOTES.md](NOTES.md) for internals: module structure, per-file design notes, and API notes (file context strategies, content part types).
 
 ## Dependencies
 
-- [`github.com/sashabaranov/go-openai`](https://github.com/sashabaranov/go-openai) — OpenAI-compatible API client
 - [`gopkg.in/yaml.v3`](https://pkg.go.dev/gopkg.in/yaml.v3) — YAML config parsing

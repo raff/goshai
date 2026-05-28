@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	openai "github.com/sashabaranov/go-openai"
 )
 
 // inlineRefRe matches @"quoted path" or @unquoted-token in prompt text.
@@ -51,15 +49,15 @@ func imageMediaType(path string) string {
 	return imageExts[strings.ToLower(filepath.Ext(path))]
 }
 
-func buildImagePart(path, mime string) (openai.ChatMessagePart, error) {
+func buildImagePart(path, mime string) (MessagePart, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return openai.ChatMessagePart{}, err
+		return MessagePart{}, err
 	}
 	uri := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
-	return openai.ChatMessagePart{
-		Type:     openai.ChatMessagePartTypeImageURL,
-		ImageURL: &openai.ChatMessageImageURL{URL: uri},
+	return MessagePart{
+		Type:     PartTypeImageURL,
+		ImageURL: &ImageURL{URL: uri},
 	}, nil
 }
 
@@ -153,21 +151,21 @@ func parseInlineRefs(prompt string) []promptSegment {
 }
 
 // appendTextPart appends text to the last part if it is a text part, otherwise adds a new text part.
-func appendTextPart(parts []openai.ChatMessagePart, text string) []openai.ChatMessagePart {
+func appendTextPart(parts []MessagePart, text string) []MessagePart {
 	if text == "" {
 		return parts
 	}
-	if len(parts) > 0 && parts[len(parts)-1].Type == openai.ChatMessagePartTypeText {
+	if len(parts) > 0 && parts[len(parts)-1].Type == PartTypeText {
 		parts[len(parts)-1].Text += text
 		return parts
 	}
-	return append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: text})
+	return append(parts, MessagePart{Type: PartTypeText, Text: text})
 }
 
-// buildUserMessage assembles the user ChatCompletionMessage.
+// buildUserMessage assembles the user Message.
 // -f files are prepended; @filename tokens in userPrompt are substituted inline.
 // Uses Content string for text-only; switches to MultiContent when any file is an image.
-func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionMessage, error) {
+func buildUserMessage(files []string, userPrompt string) (Message, error) {
 	segs := parseInlineRefs(userPrompt)
 
 	// Detect whether any file (from -f or @) is an image or PDF.
@@ -175,8 +173,7 @@ func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionM
 	for _, path := range files {
 		ext := strings.ToLower(filepath.Ext(path))
 		if ext == ".pdf" {
-			return openai.ChatCompletionMessage{}, fmt.Errorf(
-				"PDF files require go-openai file-part support (not yet in v1.36.1): %s", path)
+			return Message{}, fmt.Errorf("PDF files are not supported: %s", path)
 		}
 		if imageMediaType(path) != "" {
 			hasImage = true
@@ -188,8 +185,7 @@ func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionM
 		}
 		ext := strings.ToLower(filepath.Ext(seg.filePath))
 		if ext == ".pdf" {
-			return openai.ChatCompletionMessage{}, fmt.Errorf(
-				"PDF files require go-openai file-part support (not yet in v1.36.1): %s", seg.filePath)
+			return Message{}, fmt.Errorf("PDF files are not supported: %s", seg.filePath)
 		}
 		if imageMediaType(seg.filePath) != "" {
 			hasImage = true
@@ -197,12 +193,12 @@ func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionM
 	}
 
 	if !hasImage {
-		// Text-only path: build Content string (backward-compatible).
+		// Text-only path: build Content string.
 		var sb strings.Builder
 		for _, path := range files {
 			block, err := textFileBlock(path)
 			if err != nil {
-				return openai.ChatCompletionMessage{}, err
+				return Message{}, err
 			}
 			sb.WriteString(block)
 		}
@@ -212,7 +208,7 @@ func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionM
 			} else {
 				block, err := textFileBlock(seg.filePath)
 				if err != nil {
-					return openai.ChatCompletionMessage{}, err
+					return Message{}, err
 				}
 				sb.WriteString(block)
 			}
@@ -221,26 +217,23 @@ func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionM
 		if segs == nil && userPrompt != "" {
 			sb.WriteString(userPrompt)
 		}
-		return openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: sb.String(),
-		}, nil
+		return Message{Role: RoleUser, Content: sb.String()}, nil
 	}
 
 	// Mixed or image-only path: build MultiContent.
-	var parts []openai.ChatMessagePart
+	var parts []MessagePart
 
 	for _, path := range files {
 		if mime := imageMediaType(path); mime != "" {
 			part, err := buildImagePart(path, mime)
 			if err != nil {
-				return openai.ChatCompletionMessage{}, err
+				return Message{}, err
 			}
 			parts = append(parts, part)
 		} else {
 			block, err := textFileBlock(path)
 			if err != nil {
-				return openai.ChatCompletionMessage{}, err
+				return Message{}, err
 			}
 			parts = appendTextPart(parts, block)
 		}
@@ -252,13 +245,13 @@ func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionM
 		} else if mime := imageMediaType(seg.filePath); mime != "" {
 			part, err := buildImagePart(seg.filePath, mime)
 			if err != nil {
-				return openai.ChatCompletionMessage{}, err
+				return Message{}, err
 			}
 			parts = append(parts, part)
 		} else {
 			block, err := textFileBlock(seg.filePath)
 			if err != nil {
-				return openai.ChatCompletionMessage{}, err
+				return Message{}, err
 			}
 			parts = appendTextPart(parts, block)
 		}
@@ -268,10 +261,7 @@ func buildUserMessage(files []string, userPrompt string) (openai.ChatCompletionM
 		parts = appendTextPart(parts, userPrompt)
 	}
 
-	return openai.ChatCompletionMessage{
-		Role:         openai.ChatMessageRoleUser,
-		MultiContent: parts,
-	}, nil
+	return Message{Role: RoleUser, MultiContent: parts}, nil
 }
 
 func fenceMarker(line string) (string, bool) {
@@ -352,17 +342,17 @@ func stripFileContent(content string) string {
 
 // stripFileBlocks returns a copy of the message slice with file blocks and images removed from
 // user messages. MultiContent messages are collapsed to a Content string after stripping.
-func stripFileBlocks(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	result := make([]openai.ChatCompletionMessage, len(messages))
+func stripFileBlocks(messages []Message) []Message {
+	result := make([]Message, len(messages))
 	copy(result, messages)
 	for i, msg := range result {
-		if msg.Role != openai.ChatMessageRoleUser {
+		if msg.Role != RoleUser {
 			continue
 		}
 		if msg.MultiContent != nil {
 			var sb strings.Builder
 			for _, part := range msg.MultiContent {
-				if part.Type == openai.ChatMessagePartTypeText {
+				if part.Type == PartTypeText {
 					if stripped := stripFileContent(part.Text); stripped != "" {
 						if sb.Len() > 0 {
 							sb.WriteString(" ")
@@ -383,16 +373,16 @@ func stripFileBlocks(messages []openai.ChatCompletionMessage) []openai.ChatCompl
 
 // buildGenPromptRequest formats a cleaned conversation into a meta-prompt that asks the model
 // to produce a reusable prompt capturing the original task intent.
-func buildGenPromptRequest(messages []openai.ChatCompletionMessage) string {
+func buildGenPromptRequest(messages []Message) string {
 	var sb strings.Builder
 	sb.WriteString("Here is a conversation history (file contents have been removed):\n\n")
 	for _, msg := range messages {
 		switch msg.Role {
-		case openai.ChatMessageRoleSystem:
+		case RoleSystem:
 			fmt.Fprintf(&sb, "SYSTEM: %s\n\n", msg.Content)
-		case openai.ChatMessageRoleUser:
+		case RoleUser:
 			fmt.Fprintf(&sb, "USER: %s\n\n", msg.Content)
-		case openai.ChatMessageRoleAssistant:
+		case RoleAssistant:
 			fmt.Fprintf(&sb, "ASSISTANT: %s\n\n", msg.Content)
 		}
 	}
@@ -404,14 +394,11 @@ func buildGenPromptRequest(messages []openai.ChatCompletionMessage) string {
 }
 
 // BuildMessages assembles the messages slice for the API call.
-func BuildMessages(systemPrompt string, files []string, userPrompt string) ([]openai.ChatCompletionMessage, error) {
-	var msgs []openai.ChatCompletionMessage
+func BuildMessages(systemPrompt string, files []string, userPrompt string) ([]Message, error) {
+	var msgs []Message
 
 	if systemPrompt != "" {
-		msgs = append(msgs, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: systemPrompt,
-		})
+		msgs = append(msgs, Message{Role: RoleSystem, Content: systemPrompt})
 	}
 
 	userMsg, err := buildUserMessage(files, userPrompt)
