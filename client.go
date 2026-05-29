@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
+	"os"
 	"strings"
 )
 
@@ -78,6 +80,28 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(w.Content, &m.Content)
 }
 
+// debugTransport logs outgoing requests and incoming responses to stderr.
+type debugTransport struct {
+	rt http.RoundTripper
+}
+
+func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	dump, _ := httputil.DumpRequestOut(req, true)
+	fmt.Fprintf(os.Stderr, "--- request ---\n%s\n", dump)
+
+	resp, err := d.rt.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// For SSE streaming responses, only dump headers to avoid consuming the body.
+	isStream := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+	dump, _ = httputil.DumpResponse(resp, !isStream)
+	fmt.Fprintf(os.Stderr, "--- response ---\n%s\n", dump)
+
+	return resp, nil
+}
+
 // Client is a minimal OpenAI-compatible HTTP client.
 type Client struct {
 	BaseURL    string
@@ -85,12 +109,16 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-func NewClient(baseURL, token string) *Client {
-	return &Client{
+func NewClient(baseURL, token string, verbose bool) *Client {
+	c := &Client{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		Token:      token,
 		HTTPClient: &http.Client{},
 	}
+	if verbose {
+		c.HTTPClient.Transport = &debugTransport{rt: http.DefaultTransport}
+	}
+	return c
 }
 
 func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {

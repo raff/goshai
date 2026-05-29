@@ -73,17 +73,17 @@ func fuzzyMatchModel(ctx context.Context, client *Client, input string) (string,
 
 func main() {
 	var (
-		files        multiFlag
-		promptName   string
-		model        string
-		serverURL    string
-		token        string
-		listPrompts  bool
-		listModels   bool
-		listEnvs     bool
-		listAliases  bool
-		setAlias     string
-		writeConfig  bool
+		files          multiFlag
+		promptName     string
+		model          string
+		serverURL      string
+		token          string
+		listPrompts    bool
+		listModels     bool
+		listEnvs       bool
+		listAliases    bool
+		setAlias       string
+		writeConfig    bool
 		noStream       bool
 		thinking       bool
 		thinkingBudget int
@@ -92,6 +92,7 @@ func main() {
 		listSessions   bool
 		genPrompt      bool
 		envName        string
+		verbose        bool
 	)
 
 	// Pre-scan for -e so LoadConfig can select the right environment
@@ -145,6 +146,8 @@ func main() {
 	flag.StringVar(&envName, "env", "", "environment to use (default: first in config)")
 	flag.BoolVar(&listEnvs, "E", false, "list configured environments")
 	flag.BoolVar(&listEnvs, "envs", false, "list configured environments")
+	flag.BoolVar(&verbose, "v", false, "verbose: log HTTP requests and responses to stderr")
+	flag.BoolVar(&verbose, "verbose", false, "verbose: log HTTP requests and responses to stderr")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: goshai [flags] [prompt...]\n\n")
@@ -159,6 +162,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -thinking-budget N  token budget for thinking (default %d)\n", defaultThinkingBudget)
 		fmt.Fprintf(os.Stderr, "  -e, -env <name>     select named environment from config\n")
 		fmt.Fprintf(os.Stderr, "  -E, -envs           list configured environments\n")
+		fmt.Fprintf(os.Stderr, "  -v, -verbose        log HTTP requests and responses to stderr\n")
 		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
 		fmt.Fprintf(os.Stderr, "  -M, -models         list available models (requires server URL)\n")
 		fmt.Fprintf(os.Stderr, "  -A, -aliases        list model aliases\n")
@@ -356,7 +360,7 @@ func main() {
 		if serverURL == "" {
 			log.Fatal("no server URL configured; use -u flag or set url in config.yaml")
 		}
-		client := NewClient(serverURL, token)
+		client := NewClient(serverURL, token, verbose)
 		modelInfos, err := client.ListModels(context.Background())
 		if err != nil {
 			log.Fatal("models error: ", err)
@@ -399,7 +403,7 @@ func main() {
 		}
 	}
 	if modelFlag != "" && !aliasResolved {
-		client := NewClient(serverURL, token)
+		client := NewClient(serverURL, token, verbose)
 		if resolved, ok := fuzzyMatchModel(context.Background(), client, model); ok {
 			model = resolved
 		}
@@ -426,7 +430,7 @@ func main() {
 			{Role: RoleSystem, Content: "You are an expert at distilling conversations into clear, reusable prompts."},
 			{Role: RoleUser, Content: buildGenPromptRequest(cleaned)},
 		}
-		client := NewClient(serverURL, token)
+		client := NewClient(serverURL, token, verbose)
 		content, err := client.ChatCompletion(context.Background(), model, metaMessages, ChatOptions{})
 		if err != nil {
 			log.Fatal("API error: ", err)
@@ -488,7 +492,7 @@ func main() {
 		}
 	}
 
-	client := NewClient(serverURL, token)
+	client := NewClient(serverURL, token, verbose)
 	opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget}
 
 	if noStream {
