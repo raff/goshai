@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 // multiFlag supports repeatable -f flags.
@@ -31,27 +32,40 @@ func getEnvArg(args []string) string {
 	return envName
 }
 
-// fuzzyMatchModel fetches the model list from the server and returns the best
-// match for input using prefix then substring matching (case-insensitive).
+// fuzzyMatchModel returns the best match for input against the server model list,
+// using a local cache keyed by serverURL to avoid a network call on every run.
 // Returns ("", false) when no candidate is found.
-func fuzzyMatchModel(ctx context.Context, client *Client, input string) (string, bool) {
-	models, err := client.ListModels(ctx)
-	if err != nil {
-		return "", false
+func fuzzyMatchModel(ctx context.Context, client *Client, serverURL, input string) (string, bool) {
+	cache := LoadModelsCache()
+	ids, cached := cache.CachedModels(serverURL)
+	if !cached {
+		infos, err := client.ListModels(ctx)
+		if err != nil {
+			return "", false
+		}
+		ids = make([]string, 0, len(infos))
+		for _, m := range infos {
+			ids = append(ids, m.ID)
+		}
+		if cache == nil {
+			cache = ModelsCache{}
+		}
+		cache[serverURL] = ModelsCacheEntry{Models: ids, UpdatedAt: time.Now()}
+		SaveModelsCache(cache)
 	}
 
 	inputLower := strings.ToLower(input)
 	var prefixMatches, containsMatches []string
 
-	for _, m := range models {
-		idLower := strings.ToLower(m.ID)
+	for _, id := range ids {
+		idLower := strings.ToLower(id)
 		if idLower == inputLower {
-			return m.ID, true
+			return id, true
 		}
 		if strings.HasPrefix(idLower, inputLower) {
-			prefixMatches = append(prefixMatches, m.ID)
+			prefixMatches = append(prefixMatches, id)
 		} else if strings.Contains(idLower, inputLower) {
-			containsMatches = append(containsMatches, m.ID)
+			containsMatches = append(containsMatches, id)
 		}
 	}
 
@@ -404,7 +418,7 @@ func main() {
 	}
 	if modelFlag != "" && !aliasResolved {
 		client := NewClient(serverURL, token, verbose)
-		if resolved, ok := fuzzyMatchModel(context.Background(), client, model); ok {
+		if resolved, ok := fuzzyMatchModel(context.Background(), client, serverURL, model); ok {
 			model = resolved
 		}
 	}

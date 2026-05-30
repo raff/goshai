@@ -6,9 +6,62 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// modelsCacheTTL is how long a cached model list is considered fresh.
+const modelsCacheTTL = 24 * time.Hour
+
+// ModelsCacheEntry holds a list of model IDs fetched from one server URL.
+type ModelsCacheEntry struct {
+	Models    []string  `yaml:"models"`
+	UpdatedAt time.Time `yaml:"updated_at"`
+}
+
+// ModelsCache maps server base URL → cached model list.
+type ModelsCache map[string]ModelsCacheEntry
+
+// LoadModelsCache reads models_cache.yaml; returns an empty cache on any error.
+func LoadModelsCache() ModelsCache {
+	dir, err := configDir()
+	if err != nil {
+		return ModelsCache{}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "models_cache.yaml"))
+	if err != nil {
+		return ModelsCache{}
+	}
+	var c ModelsCache
+	if err := yaml.Unmarshal(data, &c); err != nil || c == nil {
+		return ModelsCache{}
+	}
+	return c
+}
+
+// SaveModelsCache writes the cache back to models_cache.yaml, ignoring errors.
+func SaveModelsCache(c ModelsCache) {
+	dir, err := configDir()
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(dir, 0o755)
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, "models_cache.yaml"), data, 0o600)
+}
+
+// CachedModels returns (models, true) when a fresh entry exists for serverURL.
+func (c ModelsCache) CachedModels(serverURL string) ([]string, bool) {
+	entry, ok := c[serverURL]
+	if !ok || time.Since(entry.UpdatedAt) > modelsCacheTTL {
+		return nil, false
+	}
+	return entry.Models, true
+}
 
 // Config holds settings from ~/.config/goshai/config.yaml.
 // Name is the environment key (map key in the YAML); it is not written as a field.
