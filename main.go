@@ -370,11 +370,13 @@ func main() {
 		return
 	}
 
+	if serverURL == "" {
+		log.Fatal("no server URL configured; use -u flag or set url in config.yaml")
+	}
+
+	client := NewClient(serverURL, token, verbose)
+
 	if listModels {
-		if serverURL == "" {
-			log.Fatal("no server URL configured; use -u flag or set url in config.yaml")
-		}
-		client := NewClient(serverURL, token, verbose)
 		modelInfos, err := client.ListModels(context.Background())
 		if err != nil {
 			log.Fatal("models error: ", err)
@@ -401,10 +403,6 @@ func main() {
 		return
 	}
 
-	if serverURL == "" {
-		log.Fatal("no server URL configured; use -u flag or set url in config.yaml")
-	}
-
 	// Resolve model: alias lookup first, then fuzzy match against server model list
 	// if -m was explicitly given and the alias didn't resolve it.
 	aliasResolved := false
@@ -417,7 +415,6 @@ func main() {
 		}
 	}
 	if modelFlag != "" && !aliasResolved {
-		client := NewClient(serverURL, token, verbose)
 		if resolved, ok := fuzzyMatchModel(context.Background(), client, serverURL, model); ok {
 			model = resolved
 		}
@@ -444,7 +441,6 @@ func main() {
 			{Role: RoleSystem, Content: "You are an expert at distilling conversations into clear, reusable prompts."},
 			{Role: RoleUser, Content: buildGenPromptRequest(cleaned)},
 		}
-		client := NewClient(serverURL, token, verbose)
 		content, err := client.ChatCompletion(context.Background(), model, metaMessages, ChatOptions{})
 		if err != nil {
 			log.Fatal("API error: ", err)
@@ -506,7 +502,6 @@ func main() {
 		}
 	}
 
-	client := NewClient(serverURL, token, verbose)
 	opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget}
 
 	if noStream {
