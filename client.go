@@ -163,10 +163,18 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return result.Data, nil
 }
 
+// Usage holds token consumption reported by the API.
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 // ChatOptions holds optional per-request parameters.
 type ChatOptions struct {
 	Think          bool
 	ThinkingBudget int
+	Stats          bool
 }
 
 const defaultThinkingBudget = 10000
@@ -176,11 +184,16 @@ type thinkingParams struct {
 	BudgetTokens int    `json:"budget_tokens"`
 }
 
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
 type chatRequest struct {
-	Model    string          `json:"model"`
-	Messages []Message       `json:"messages"`
-	Stream   bool            `json:"stream,omitempty"`
-	Thinking *thinkingParams `json:"thinking,omitempty"`
+	Model         string          `json:"model"`
+	Messages      []Message       `json:"messages"`
+	Stream        bool            `json:"stream,omitempty"`
+	Thinking      *thinkingParams `json:"thinking,omitempty"`
+	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
 }
 
 func buildChatRequest(model string, messages []Message, opts ChatOptions, stream bool) chatRequest {
@@ -192,53 +205,59 @@ func buildChatRequest(model string, messages []Message, opts ChatOptions, stream
 		}
 		r.Thinking = &thinkingParams{Type: "enabled", BudgetTokens: budget}
 	}
+	if stream && opts.Stats {
+		r.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
 	return r
 }
 
-// ChatCompletion sends a non-streaming chat request and returns the response content.
-func (c *Client) ChatCompletion(ctx context.Context, model string, messages []Message, opts ChatOptions) (string, error) {
+// ChatCompletion sends a non-streaming chat request and returns the response content and usage.
+func (c *Client) ChatCompletion(ctx context.Context, model string, messages []Message, opts ChatOptions) (string, Usage, error) {
 	payload, err := json.Marshal(buildChatRequest(model, messages, opts, false))
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	req, err := c.newRequest(ctx, "POST", "/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", apiError(resp)
+		return "", Usage{}, apiError(resp)
 	}
 
 	var result struct {
 		Choices []struct {
 			Message Message `json:"message"`
 		} `json:"choices"`
+		Usage Usage `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	if len(result.Choices) == 0 {
-		return "", nil
+		return "", result.Usage, nil
 	}
-	return result.Choices[0].Message.Content, nil
+	return result.Choices[0].Message.Content, result.Usage, nil
 }
 
 // ChatStream reads a server-sent-events streaming response.
 type ChatStream struct {
 	body    io.ReadCloser
 	scanner *bufio.Scanner
+	Usage   Usage
 }
 
 func (s *ChatStream) Close() { s.body.Close() }
 
 // Recv returns the next content chunk, or io.EOF when the stream ends.
+// After io.EOF, s.Usage holds the token counts if stream_options.include_usage was set.
 func (s *ChatStream) Recv() (string, error) {
 	for s.scanner.Scan() {
 		line := s.scanner.Text()
@@ -255,9 +274,13 @@ func (s *ChatStream) Recv() (string, error) {
 					Content string `json:"content"`
 				} `json:"delta"`
 			} `json:"choices"`
+			Usage *Usage `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return "", err
+		}
+		if chunk.Usage != nil {
+			s.Usage = *chunk.Usage
 		}
 		if len(chunk.Choices) > 0 {
 			return chunk.Choices[0].Delta.Content, nil

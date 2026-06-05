@@ -107,6 +107,7 @@ func main() {
 		genPrompt      bool
 		envName        string
 		verbose        bool
+		stats          bool
 	)
 
 	// Pre-scan for -e so LoadConfig can select the right environment
@@ -162,6 +163,8 @@ func main() {
 	flag.BoolVar(&listEnvs, "envs", false, "list configured environments")
 	flag.BoolVar(&verbose, "v", false, "verbose: log HTTP requests and responses to stderr")
 	flag.BoolVar(&verbose, "verbose", false, "verbose: log HTTP requests and responses to stderr")
+	flag.BoolVar(&stats, "stat", false, "print token usage and performance stats after each response")
+	flag.BoolVar(&stats, "stats", false, "print token usage and performance stats after each response")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: goshai [flags] [prompt...]\n\n")
@@ -177,6 +180,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -e, -env <name>     select named environment from config\n")
 		fmt.Fprintf(os.Stderr, "  -E, -envs           list configured environments\n")
 		fmt.Fprintf(os.Stderr, "  -v, -verbose        log HTTP requests and responses to stderr\n")
+		fmt.Fprintf(os.Stderr, "  -stat, -stats       print token usage and performance stats\n")
 		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
 		fmt.Fprintf(os.Stderr, "  -M, -models         list available models (requires server URL)\n")
 		fmt.Fprintf(os.Stderr, "  -A, -aliases        list model aliases\n")
@@ -441,7 +445,7 @@ func main() {
 			{Role: RoleSystem, Content: "You are an expert at distilling conversations into clear, reusable prompts."},
 			{Role: RoleUser, Content: buildGenPromptRequest(cleaned)},
 		}
-		content, err := client.ChatCompletion(context.Background(), model, metaMessages, ChatOptions{})
+		content, _, err := client.ChatCompletion(context.Background(), model, metaMessages, ChatOptions{})
 		if err != nil {
 			log.Fatal("API error: ", err)
 		}
@@ -502,14 +506,19 @@ func main() {
 		}
 	}
 
-	opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget}
+	opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget, Stats: stats}
 
 	if noStream {
-		content, err := client.ChatCompletion(context.Background(), model, messages, opts)
+		start := time.Now()
+		content, usage, err := client.ChatCompletion(context.Background(), model, messages, opts)
+		elapsed := time.Since(start)
 		if err != nil {
 			log.Fatal("API error: ", err)
 		}
 		fmt.Println(content)
+		if stats {
+			printStats(os.Stderr, usage, elapsed, 0)
+		}
 		messages = append(messages, Message{Role: RoleAssistant, Content: content})
 		if err := SaveSession(saveAs, messages); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
@@ -517,6 +526,7 @@ func main() {
 		return
 	}
 
+	start := time.Now()
 	stream, err := client.ChatCompletionStream(context.Background(), model, messages, opts)
 	if err != nil {
 		log.Fatal("API error: ", err)
@@ -524,6 +534,7 @@ func main() {
 	defer stream.Close()
 
 	var sb strings.Builder
+	var ttft time.Duration
 	for {
 		chunk, err := stream.Recv()
 		if err == io.EOF {
@@ -532,13 +543,39 @@ func main() {
 		if err != nil {
 			log.Fatal("stream error: ", err)
 		}
+		if ttft == 0 && chunk != "" {
+			ttft = time.Since(start)
+		}
 		fmt.Print(chunk)
 		sb.WriteString(chunk)
 	}
+	elapsed := time.Since(start)
 	fmt.Println()
 
+	if stats {
+		printStats(os.Stderr, stream.Usage, elapsed, ttft)
+	}
 	messages = append(messages, Message{Role: RoleAssistant, Content: sb.String()})
 	if err := SaveSession(saveAs, messages); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
 	}
+}
+
+func printStats(w io.Writer, u Usage, elapsed, ttft time.Duration) {
+	fmt.Fprintf(w, "\n--- stats ---\n")
+	fmt.Fprintf(w, "  tokens:  prompt=%d  completion=%d  total=%d\n",
+		u.PromptTokens, u.CompletionTokens, u.TotalTokens)
+	fmt.Fprintf(w, "  time:    %.2fs", elapsed.Seconds())
+	if ttft > 0 {
+		fmt.Fprintf(w, "  ttft=%.2fs", ttft.Seconds())
+	}
+	if u.CompletionTokens > 0 && elapsed > 0 {
+		genTime := elapsed
+		if ttft > 0 {
+			genTime = elapsed - ttft
+		}
+		tps := float64(u.CompletionTokens) / genTime.Seconds()
+		fmt.Fprintf(w, "  tps=%.1f", tps)
+	}
+	fmt.Fprintln(w)
 }
