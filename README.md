@@ -141,6 +141,7 @@ Flags:
   -A, -aliases        list model aliases
   -a, -alias <k=v>    set a model alias (e.g. -a mini=gpt-4o-mini)
   -W, -write-config   save config and create default prompts.yaml if missing
+  -R, -read-config    print full configuration for the selected environment (token included)
   -s, -session <name> continue named session (default: save to 'last')
   -r, -rename <name>  rename 'last' session to a new name
   -S, -sessions       list available sessions
