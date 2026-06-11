@@ -63,6 +63,8 @@ nostream: false                    # set true for servers that don't support str
 **Multiple named environments:**
 
 ```yaml
+default: remote
+
 local:
   url: "http://localhost:11434/v1"
   model: "llama3.2"
@@ -80,7 +82,7 @@ work:
   thinking-budget: 16000
 ```
 
-When using named environments, select one with `-e <name>`. If `-e` is omitted, the first entry in the file is used as the default. Use `-E` to list all configured environments.
+When using named environments, select one with `-e <name>`. If `-e` is omitted, the environment named by the top-level `default:` key is used; if no `default:` key is set, the first entry in the file is used. Use `-E` to list all configured environments and `-D <name>` to set the default.
 
 String values (`url`, `token`, `model`, `prompt`) support environment variable expansion using `$VAR` or `${VAR}` syntax, useful for keeping secrets out of the config file.
 
@@ -136,6 +138,7 @@ Flags:
   -thinking-budget N  token budget for thinking (default 10000)
   -e, -env <name>     select named environment from config
   -E, -envs           list configured environments
+  -D, -set-default <name>  set the default environment
   -P, -prompts        list available named prompts
   -M, -models         list available models (requires server URL)
   -A, -aliases        list model aliases

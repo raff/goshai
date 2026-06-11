@@ -97,6 +97,7 @@ func main() {
 		listEnvs       bool
 		listAliases    bool
 		setAlias       string
+		setDefault     string
 		writeConfig    bool
 		readConfig     bool
 		noStream       bool
@@ -163,6 +164,8 @@ func main() {
 	flag.StringVar(&envName, "env", "", "environment to use (default: first in config)")
 	flag.BoolVar(&listEnvs, "E", false, "list configured environments")
 	flag.BoolVar(&listEnvs, "envs", false, "list configured environments")
+	flag.StringVar(&setDefault, "D", "", "set the default environment")
+	flag.StringVar(&setDefault, "set-default", "", "set the default environment")
 	flag.BoolVar(&verbose, "v", false, "verbose: log HTTP requests and responses to stderr")
 	flag.BoolVar(&verbose, "verbose", false, "verbose: log HTTP requests and responses to stderr")
 
@@ -179,6 +182,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -thinking-budget N  token budget for thinking (default %d)\n", defaultThinkingBudget)
 		fmt.Fprintf(os.Stderr, "  -e, -env <name>     select named environment from config\n")
 		fmt.Fprintf(os.Stderr, "  -E, -envs           list configured environments\n")
+		fmt.Fprintf(os.Stderr, "  -D, -set-default <name>  set the default environment\n")
 		fmt.Fprintf(os.Stderr, "  -v, -verbose        log HTTP requests and responses to stderr\n")
 		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
 		fmt.Fprintf(os.Stderr, "  -M, -models         list available models (requires server URL)\n")
@@ -209,7 +213,7 @@ func main() {
 	}
 
 	if listEnvs {
-		envs, err := ListConfigs()
+		envs, defaultEnv, err := ListConfigs()
 		if err != nil {
 			log.Fatal("config error: ", err)
 		}
@@ -222,12 +226,21 @@ func main() {
 			if name == "" {
 				name = "(default)"
 			}
+			isDefault := (defaultEnv != "" && e.Name == defaultEnv) || (defaultEnv == "" && i == 0)
 			marker := "  "
-			if i == 0 {
+			if isDefault {
 				marker = "* "
 			}
 			fmt.Printf("%s%-20s  %-40s  %s\n", marker, name, strOrDefault(e.URL, "(no url)"), strOrDefault(e.Model, "(no model)"))
 		}
+		return
+	}
+
+	if setDefault != "" {
+		if err := SetDefaultEnv(setDefault); err != nil {
+			log.Fatal("set-default error: ", err)
+		}
+		fmt.Printf("default environment set to %q\n", setDefault)
 		return
 	}
 
