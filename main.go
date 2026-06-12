@@ -97,7 +97,9 @@ func main() {
 		listEnvs       bool
 		listAliases    bool
 		setAlias       string
+		setDefault     string
 		writeConfig    bool
+		readConfig     bool
 		noStream       bool
 		thinking       bool
 		thinkingBudget int
@@ -149,6 +151,8 @@ func main() {
 	flag.IntVar(&thinkingBudget, "thinking-budget", 0, "token budget for thinking (default 10000 when thinking is enabled)")
 	flag.BoolVar(&writeConfig, "W", false, "write current configuration to config.yaml and create default prompts.yaml")
 	flag.BoolVar(&writeConfig, "write-config", false, "write current configuration to config.yaml and create default prompts.yaml")
+	flag.BoolVar(&readConfig, "R", false, "print full configuration for the selected environment (token included)")
+	flag.BoolVar(&readConfig, "read-config", false, "print full configuration for the selected environment (token included)")
 	flag.StringVar(&sessionName, "s", "", "session name to continue (creates if new); omit to start fresh and save to 'last'")
 	flag.StringVar(&sessionName, "session", "", "session name to continue (creates if new); omit to start fresh and save to 'last'")
 	flag.StringVar(&renameTo, "r", "", "rename the 'last' session to a new name and exit")
@@ -161,6 +165,8 @@ func main() {
 	flag.StringVar(&envName, "env", "", "environment to use (default: first in config)")
 	flag.BoolVar(&listEnvs, "E", false, "list configured environments")
 	flag.BoolVar(&listEnvs, "envs", false, "list configured environments")
+	flag.StringVar(&setDefault, "D", "", "set the default environment")
+	flag.StringVar(&setDefault, "set-default", "", "set the default environment")
 	flag.BoolVar(&verbose, "v", false, "verbose: log HTTP requests and responses to stderr")
 	flag.BoolVar(&verbose, "verbose", false, "verbose: log HTTP requests and responses to stderr")
 	flag.BoolVar(&stats, "stat", false, "print token usage and performance stats after each response")
@@ -179,6 +185,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -thinking-budget N  token budget for thinking (default %d)\n", defaultThinkingBudget)
 		fmt.Fprintf(os.Stderr, "  -e, -env <name>     select named environment from config\n")
 		fmt.Fprintf(os.Stderr, "  -E, -envs           list configured environments\n")
+		fmt.Fprintf(os.Stderr, "  -D, -set-default <name>  set the default environment\n")
 		fmt.Fprintf(os.Stderr, "  -v, -verbose        log HTTP requests and responses to stderr\n")
 		fmt.Fprintf(os.Stderr, "  -stat, -stats       print token usage and performance stats\n")
 		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
@@ -186,6 +193,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -A, -aliases        list model aliases\n")
 		fmt.Fprintf(os.Stderr, "  -a, -alias <k=v>    set a model alias (e.g. -a mini=gpt-4o-mini)\n")
 		fmt.Fprintf(os.Stderr, "  -W, -write-config   save config and create default prompts.yaml if missing\n")
+		fmt.Fprintf(os.Stderr, "  -R, -read-config    print full configuration for the selected environment (token included)\n")
 		fmt.Fprintf(os.Stderr, "  -s, -session <name> continue named session (default: save to 'last')\n")
 		fmt.Fprintf(os.Stderr, "  -r, -rename <name>  rename 'last' session to a new name\n")
 		fmt.Fprintf(os.Stderr, "  -S, -sessions       list available sessions\n")
@@ -204,12 +212,12 @@ func main() {
 
 	flag.Parse()
 
-	if earlyConfigErr != nil && !writeConfig && !listEnvs {
+	if earlyConfigErr != nil && !writeConfig && !readConfig && !listEnvs {
 		log.Fatal("config error: ", earlyConfigErr)
 	}
 
 	if listEnvs {
-		envs, err := ListConfigs()
+		envs, defaultEnv, err := ListConfigs()
 		if err != nil {
 			log.Fatal("config error: ", err)
 		}
@@ -222,12 +230,21 @@ func main() {
 			if name == "" {
 				name = "(default)"
 			}
+			isDefault := (defaultEnv != "" && e.Name == defaultEnv) || (defaultEnv == "" && i == 0)
 			marker := "  "
-			if i == 0 {
+			if isDefault {
 				marker = "* "
 			}
 			fmt.Printf("%s%-20s  %-40s  %s\n", marker, name, strOrDefault(e.URL, "(no url)"), strOrDefault(e.Model, "(no model)"))
 		}
+		return
+	}
+
+	if setDefault != "" {
+		if err := SetDefaultEnv(setDefault); err != nil {
+			log.Fatal("set-default error: ", err)
+		}
+		fmt.Printf("default environment set to %q\n", setDefault)
 		return
 	}
 
@@ -236,14 +253,32 @@ func main() {
 	if envName != earlyEnv {
 		cfg, err = LoadConfig(envName)
 		if err != nil {
-			if writeConfig && isEnvNotFound(err) {
+			if (writeConfig || readConfig) && isEnvNotFound(err) {
 				cfg = Config{Name: envName}
 			} else {
 				log.Fatal("config error: ", err)
 			}
 		}
-	} else if earlyConfigErr != nil && writeConfig {
+	} else if earlyConfigErr != nil && (writeConfig || readConfig) {
 		cfg = Config{Name: envName}
+	}
+
+	if readConfig {
+		name := cfg.Name
+		if name == "" {
+			name = "(default)"
+		}
+		fmt.Printf("env:            %s\n", name)
+		fmt.Printf("url:            %s\n", strOrDefault(cfg.URL, "(not set)"))
+		fmt.Printf("token:          %s\n", strOrDefault(cfg.Token, "(not set)"))
+		fmt.Printf("model:          %s\n", strOrDefault(cfg.Model, "(not set)"))
+		fmt.Printf("prompt:         %s\n", strOrDefault(cfg.Prompt, "(not set)"))
+		fmt.Printf("stream:         %v\n", !cfg.NoStream)
+		fmt.Printf("think:          %v\n", cfg.Think)
+		if cfg.ThinkingBudget != 0 {
+			fmt.Printf("thinking-budget: %d\n", cfg.ThinkingBudget)
+		}
+		return
 	}
 
 	prompts, err := LoadPrompts()

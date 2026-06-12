@@ -409,7 +409,7 @@ func TestSaveConfig_namedEnvCreatesMultiEnv(t *testing.T) {
 		t.Fatalf("unexpected loaded config: %+v", cfg)
 	}
 
-	configs, err := ListConfigs()
+	configs, _, err := ListConfigs()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestSaveConfig_namedEnvConvertsLegacyConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	configs, err := ListConfigs()
+	configs, _, err := ListConfigs()
 	if err != nil {
 		t.Fatal(err)
 	}

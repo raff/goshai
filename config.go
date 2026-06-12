@@ -128,12 +128,14 @@ func expandConfig(cfg *Config) {
 	cfg.Prompt = os.ExpandEnv(cfg.Prompt)
 }
 
-// parseConfigFile returns all configs and aliases from data, preserving map insertion order.
+// parseConfigFile returns all configs, aliases, and the default env name from data,
+// preserving map insertion order.
 //
 // Multi-env format: top-level YAML mapping where each key is an environment name
-// and the value is a Config mapping. The reserved key "aliases" is decoded as
-// map[string]string and excluded from the returned configs.
+// and the value is a Config mapping. The reserved keys "aliases" and "default" are
+// decoded separately and excluded from the returned configs.
 //
+//	default: local
 //	aliases:
 //	  mini: "gpt-4o-mini"
 //	local:
@@ -148,56 +150,76 @@ func expandConfig(cfg *Config) {
 //
 //	url: "http://localhost:11434/v1"
 //	model: "llama3.2"
-func parseConfigFile(data []byte) ([]Config, Aliases, error) {
+func parseConfigFile(data []byte) ([]Config, Aliases, string, error) {
 	var node yaml.Node
 	if err := yaml.Unmarshal(data, &node); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	if node.Kind != yaml.DocumentNode || len(node.Content) == 0 {
-		return nil, nil, nil
+		return nil, nil, "", nil
 	}
 	root := node.Content[0]
 	if root.Kind != yaml.MappingNode || len(root.Content) < 2 {
-		return nil, nil, nil
+		return nil, nil, "", nil
 	}
 
-	// Detect format: if the first value is itself a mapping → multi-env.
-	if root.Content[1].Kind == yaml.MappingNode {
+	// Detect multi-env format: any top-level value is itself a mapping node.
+	isMultiEnv := false
+	for i := 1; i < len(root.Content); i += 2 {
+		if root.Content[i].Kind == yaml.MappingNode {
+			isMultiEnv = true
+			break
+		}
+	}
+
+	if isMultiEnv {
 		var configs []Config
 		var aliases Aliases
+		var defaultEnv string
 		for i := 0; i+1 < len(root.Content); i += 2 {
 			key := root.Content[i].Value
 			valNode := root.Content[i+1]
-			if key == "aliases" {
+			switch {
+			case key == "aliases":
 				var a map[string]string
 				if err := valNode.Decode(&a); err != nil {
-					return nil, nil, fmt.Errorf("aliases: %w", err)
+					return nil, nil, "", fmt.Errorf("aliases: %w", err)
 				}
 				aliases = a
-				continue
+			case key == "default" && valNode.Kind == yaml.ScalarNode:
+				defaultEnv = valNode.Value
+			default:
+				var cfg Config
+				if err := valNode.Decode(&cfg); err != nil {
+					return nil, nil, "", fmt.Errorf("environment %q: %w", key, err)
+				}
+				cfg.Name = key
+				configs = append(configs, cfg)
 			}
-			var cfg Config
-			if err := valNode.Decode(&cfg); err != nil {
-				return nil, nil, fmt.Errorf("environment %q: %w", key, err)
-			}
-			cfg.Name = key
-			configs = append(configs, cfg)
 		}
-		return configs, aliases, nil
+		return configs, aliases, defaultEnv, nil
 	}
 
 	// Legacy single-env: top-level scalars are Config fields.
 	var cfg Config
 	if err := root.Decode(&cfg); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	return []Config{cfg}, nil, nil
+	return []Config{cfg}, nil, "", nil
 }
 
-// marshalMultiEnv encodes aliases (if any) and configs as an ordered YAML map.
-// The aliases block is written first, followed by envName → Config entries.
-func marshalMultiEnv(configs []Config, aliases Aliases) ([]byte, error) {
+// marshalMultiEnv encodes defaultEnv (if set), aliases (if any), and configs as
+// an ordered YAML map. The default and aliases blocks are written first, followed
+// by envName → Config entries.
+func marshalMultiEnv(configs []Config, aliases Aliases, defaultEnv string) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+
+	if defaultEnv != "" {
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "default"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: defaultEnv},
+		)
+	}
 
 	if len(aliases) > 0 {
 		keys := make([]string, 0, len(aliases))
@@ -233,26 +255,27 @@ func marshalMultiEnv(configs []Config, aliases Aliases) ([]byte, error) {
 	return yaml.Marshal(doc)
 }
 
-// ListConfigs returns all environments from config.yaml without expanding env vars.
-// Returns nil, nil if the file does not exist.
-func ListConfigs() ([]Config, error) {
+// ListConfigs returns all environments and the configured default env name from
+// config.yaml without expanding env vars. Returns nil, "", nil if the file does
+// not exist.
+func ListConfigs() ([]Config, string, error) {
 	dir, err := configDir()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, "", nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	configs, _, err := parseConfigFile(data)
-	return configs, err
+	configs, _, defaultEnv, err := parseConfigFile(data)
+	return configs, defaultEnv, err
 }
 
 // LoadConfig reads config.yaml and returns the selected environment.
-// envName selects by name; if empty the first entry is used.
+// envName selects by name; if empty the "default" key (or the first entry) is used.
 // A missing file returns a zero-value Config.
 func LoadConfig(envName string) (Config, error) {
 	dir, err := configDir()
@@ -266,12 +289,15 @@ func LoadConfig(envName string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	configs, _, err := parseConfigFile(data)
+	configs, _, defaultEnv, err := parseConfigFile(data)
 	if err != nil {
 		return Config{}, err
 	}
 	if len(configs) == 0 {
 		return Config{}, nil
+	}
+	if envName == "" {
+		envName = defaultEnv
 	}
 	if envName == "" {
 		cfg := configs[0]
@@ -301,7 +327,7 @@ func LoadAliases() (Aliases, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, aliases, err := parseConfigFile(data)
+	_, aliases, _, err := parseConfigFile(data)
 	if err != nil {
 		return nil, err
 	}
@@ -325,12 +351,14 @@ func SaveAliases(aliases Aliases) error {
 	path := filepath.Join(dir, "config.yaml")
 
 	var configs []Config
+	var defaultEnv string
 	if existing, err := os.ReadFile(path); err == nil {
-		parsed, _, err := parseConfigFile(existing)
+		parsed, _, parsedDefault, err := parseConfigFile(existing)
 		if err != nil {
 			return err
 		}
 		configs = parsed
+		defaultEnv = parsedDefault
 		// Convert legacy single-env (unnamed) to "default" so we can use multi-env format.
 		if len(configs) > 0 && configs[0].Name == "" {
 			configs[0].Name = "default"
@@ -339,7 +367,7 @@ func SaveAliases(aliases Aliases) error {
 		return err
 	}
 
-	data, err := marshalMultiEnv(configs, aliases)
+	data, err := marshalMultiEnv(configs, aliases, defaultEnv)
 	if err != nil {
 		return err
 	}
@@ -369,13 +397,15 @@ func SaveConfig(cfg Config) error {
 	if cfg.Name != "" {
 		var configs []Config
 		var aliases Aliases
+		var defaultEnv string
 		if existing, err := os.ReadFile(path); err == nil {
-			parsed, parsedAliases, err := parseConfigFile(existing)
+			parsed, parsedAliases, parsedDefault, err := parseConfigFile(existing)
 			if err != nil {
 				return err
 			}
 			configs = parsed
 			aliases = parsedAliases
+			defaultEnv = parsedDefault
 			if len(configs) > 0 && configs[0].Name == "" {
 				legacy := configs[0]
 				if cfg.Name == "default" {
@@ -400,7 +430,7 @@ func SaveConfig(cfg Config) error {
 		if !found {
 			configs = append(configs, cfg)
 		}
-		data, err := marshalMultiEnv(configs, aliases)
+		data, err := marshalMultiEnv(configs, aliases, defaultEnv)
 		if err != nil {
 			return err
 		}
@@ -417,6 +447,43 @@ func SaveConfig(cfg Config) error {
 		return err
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	fmt.Println("wrote", path)
+	return nil
+}
+
+// SetDefaultEnv updates the "default" key in config.yaml to point to envName.
+// Returns EnvNotFoundError if the named environment does not exist in the file.
+func SetDefaultEnv(name string) error {
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "config.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	configs, aliases, _, err := parseConfigFile(data)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, c := range configs {
+		if c.Name == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return EnvNotFoundError{Name: name}
+	}
+	out, err := marshalMultiEnv(configs, aliases, name)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
 		return err
 	}
 	fmt.Println("wrote", path)
