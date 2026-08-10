@@ -9,7 +9,8 @@ goshai/
 ├── client.go    — custom OpenAI-compatible HTTP client (chat completions + models list)
 ├── config.go    — Config and Prompts types, YAML loading
 ├── prompt.go    — BuildMessages: assembles API messages; handles text files, images, and @filename inline refs
-└── session.go   — session load/save/list/rename, stored in ~/.config/goshai/sessions/
+├── session.go   — session load/save/list/rename, stored in ~/.config/goshai/sessions/
+└── harness.go   — harness mode: interactive REPL where the model can call a shell tool
 ```
 
 ### `config.go`
@@ -37,6 +38,10 @@ Role constants (`RoleSystem`, `RoleUser`, `RoleAssistant`) and part-type constan
 - `ChatCompletionStream(ctx, model, messages, opts)` — `POST /chat/completions` with `"stream": true`, returns a `*ChatStream`. `ChatStream.Recv()` reads the SSE response line-by-line, skipping non-`data:` lines, returning each delta content string, and returning `io.EOF` on the `[DONE]` sentinel.
 
 `ChatOptions` carries per-request options currently passed to both call methods. `buildChatRequest` translates `ChatOptions` into the appropriate JSON fields before marshaling.
+
+`ChatCompletionRaw(ctx, model, messages, opts)` is the non-streaming call underlying `ChatCompletion`; it returns the full response `Message` (content and/or `ToolCalls`) rather than just a content string, which is what harness mode needs.
+
+**Tool calling** (function-calling): `Message` carries `ToolCalls []ToolCall` (assistant messages that invoke tools), `ToolCallID` and `Name` (tool-role messages responding to a call). `MarshalJSON`/`UnmarshalJSON` were extended to (de)serialize `tool_calls`, `tool_call_id`, and `name` alongside `content` — an assistant message with `ToolCalls` set and empty `Content` omits the `content` field entirely, matching what most OpenAI-compatible servers expect. `ToolDef`/`ToolFunctionDef` describe a callable function for the request's `tools` array; `ChatOptions.Tools` carries them through `buildChatRequest`.
 
 ### `prompt.go`
 
@@ -94,6 +99,24 @@ Session files intentionally store the full API conversation so follow-up turns c
 11. If `-n`/`-no-stream` (or `nostream: true` in config): calls `client.ChatCompletion` and prints the full response
 12. Otherwise: calls `client.ChatCompletionStream` and prints each delta as it arrives
 13. Appends the assistant reply and saves the session (to the named session or `last`)
+
+If `-H`/`-harness` is set, step 9's message assembly still runs (an initial prompt, if any, seeds the first turn; with no prompt and no session, only the system message is kept — the empty trailing user message `buildUserMessage` would otherwise produce is skipped), then control passes to `RunHarness` instead of steps 10–13.
+
+### `harness.go`
+
+`RunHarness(ctx, client, model, messages, opts, saveAs)` implements the harness REPL:
+
+1. Sets `opts.Tools = []ToolDef{shellTool}` — a single function tool named `sh` that takes a `command` string parameter
+2. If `messages` already ends with an unanswered user message (initial prompt or piped stdin from `main.go`), processes that turn before reading from stdin; otherwise prints `"> "` and waits
+3. Reads a line from stdin as the next user message (blank lines are ignored)
+4. Inner loop: calls `client.ChatCompletionRaw`, appends the assistant reply to history
+   - If the reply has no `ToolCalls`, prints the content, optionally prints stats via the same `printStats` helper `main.go` uses, and breaks out to read the next line
+   - Otherwise, for each tool call: parses `{"command": "..."}` from the arguments JSON, runs it with `exec.Command("/bin/sh", "-c", command)`, prints `$ <command>` and the combined output, and appends a `tool`-role message with `exit <code>\n<output>` as content before looping back to call the model again
+5. Saves the session (if `saveAs` is set) after each tool-call round and after each completed turn
+
+Non-streaming only: tool calls need a complete response to parse, so harness mode does not use `ChatCompletionStream` regardless of the `-n` flag.
+
+**Security note:** the `sh` tool executes whatever command the model requests with no confirmation step and the permissions of the invoking user — this is intentional (matches the harness pattern of e.g. Claude Code's own bash tool) but is only ever active when `-H`/`-harness` is explicitly passed.
 
 ## OpenAI API notes
 

@@ -14,6 +14,7 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 - Non-streaming mode (`-n`) for servers that don't support streaming
 - Extended thinking / reasoning support (`-thinking`) for models that expose it
 - Session history: conversations are saved automatically and can be continued by name
+- Harness mode (`-H`): an interactive REPL where the model can execute shell commands via a tool call, observe the output, and keep going until it produces a plain-text reply
 - Generate a reusable prompt from any session (`-G`)
 - Named environments in a single config file for switching between servers (`-e`, `-E`)
 - Model aliases: define short names for long model IDs and manage them from the CLI (`-a`, `-A`)
@@ -149,6 +150,7 @@ Flags:
   -r, -rename <name>  rename 'last' session to a new name
   -S, -sessions       list available sessions
   -G, -gen-prompt     generate reusable prompt from session history
+  -H, -harness        harness mode: interactive REPL, model can run shell commands (DANGEROUS)
 
 Current configuration:
   config:  /path/to/config.yaml
@@ -360,6 +362,31 @@ The model receives the conversation history with all file contents stripped out,
     # Reuse it later
     goshai -f other.go "$(cat my_review_prompt.txt)"
 ```
+
+## Harness mode
+
+`-H`/`-harness` starts an interactive REPL in which the model can call a `sh` tool to run shell commands on your machine, see their output, and keep reasoning — looping through as many commands as it wants — before printing a plain-text reply and waiting for your next line.
+
+```bash
+    # Start a fresh harness REPL
+    goshai -H
+
+    # Seed the first turn with an initial task, then keep chatting interactively
+    goshai -H "list the go files in this repo and summarize what each one does"
+
+    # Use a system prompt tailored for agentic/tool-using tasks
+    goshai -H -p coder
+
+    # Continue (or start) a named session in harness mode
+    goshai -H -s deploy-task
+
+    # Print token usage after each turn
+    goshai -H -stats
+```
+
+**⚠️ Warning:** the model executes shell commands with no confirmation step and the full permissions of your user account. Only use harness mode with a model/server you trust, and be mindful of what it has access to (working directory, credentials, network). There is no sandboxing — treat it like giving the model a real terminal.
+
+Harness mode uses the OpenAI Chat Completions "tools" (function-calling) mechanism — `tool_calls` on the assistant message and `tool` role messages carrying the result — rather than a separate stateful API, so it works with any OpenAI-compatible server that supports function calling. It always uses non-streaming requests internally so tool calls can be parsed from a complete response.
 
 ## Implementation notes
 

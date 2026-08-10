@@ -17,10 +17,37 @@ const (
 	RoleSystem    = "system"
 	RoleUser      = "user"
 	RoleAssistant = "assistant"
+	RoleTool      = "tool"
 
 	PartTypeText     = "text"
 	PartTypeImageURL = "image_url"
 )
+
+// ToolCallFunction holds the name and JSON-encoded arguments of a requested function call.
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolCall is a single tool invocation requested by the assistant.
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolFunctionDef describes a callable function offered to the model.
+type ToolFunctionDef struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// ToolDef is a single entry in the request's "tools" array.
+type ToolDef struct {
+	Type     string          `json:"type"` // "function"
+	Function ToolFunctionDef `json:"function"`
+}
 
 // ImageURL holds the URL for an image content part.
 type ImageURL struct {
@@ -41,18 +68,27 @@ type Message struct {
 	Role         string        `json:"role"`
 	Content      string        `json:"-"`
 	MultiContent []MessagePart `json:"-"`
+	ToolCalls    []ToolCall    `json:"-"` // assistant messages requesting tool calls
+	ToolCallID   string        `json:"-"` // tool messages: ID of the call this responds to
+	Name         string        `json:"-"` // tool messages: name of the function that was called
 }
 
 func (m Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content,omitempty"`
+		ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+		ToolCallID string          `json:"tool_call_id,omitempty"`
+		Name       string          `json:"name,omitempty"`
 	}
-	w := wire{Role: m.Role}
+	w := wire{Role: m.Role, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name}
 	var err error
-	if len(m.MultiContent) > 0 {
+	switch {
+	case len(m.MultiContent) > 0:
 		w.Content, err = json.Marshal(m.MultiContent)
-	} else {
+	case m.Content != "" || len(m.ToolCalls) == 0:
+		// Always include content unless this is an assistant tool-call message
+		// with no accompanying text, which some servers expect to omit it.
 		w.Content, err = json.Marshal(m.Content)
 	}
 	if err != nil {
@@ -63,15 +99,21 @@ func (m Message) MarshalJSON() ([]byte, error) {
 
 func (m *Message) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+		ToolCallID string          `json:"tool_call_id,omitempty"`
+		Name       string          `json:"name,omitempty"`
 	}
 	var w wire
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
 	m.Role = w.Role
-	if len(w.Content) == 0 {
+	m.ToolCalls = w.ToolCalls
+	m.ToolCallID = w.ToolCallID
+	m.Name = w.Name
+	if len(w.Content) == 0 || string(w.Content) == "null" {
 		return nil
 	}
 	if w.Content[0] == '[' {
@@ -175,6 +217,7 @@ type ChatOptions struct {
 	Think          bool
 	ThinkingBudget int
 	Stats          bool
+	Tools          []ToolDef // sent as the request's "tools" array when non-empty (harness mode)
 }
 
 const defaultThinkingBudget = 10000
@@ -194,6 +237,7 @@ type chatRequest struct {
 	Stream        bool            `json:"stream,omitempty"`
 	Thinking      *thinkingParams `json:"thinking,omitempty"`
 	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
+	Tools         []ToolDef       `json:"tools,omitempty"`
 }
 
 func buildChatRequest(model string, messages []Message, opts ChatOptions, stream bool) chatRequest {
@@ -208,28 +252,32 @@ func buildChatRequest(model string, messages []Message, opts ChatOptions, stream
 	if stream && opts.Stats {
 		r.StreamOptions = &streamOptions{IncludeUsage: true}
 	}
+	if len(opts.Tools) > 0 {
+		r.Tools = opts.Tools
+	}
 	return r
 }
 
-// ChatCompletion sends a non-streaming chat request and returns the response content and usage.
-func (c *Client) ChatCompletion(ctx context.Context, model string, messages []Message, opts ChatOptions) (string, Usage, error) {
+// ChatCompletionRaw sends a non-streaming chat request and returns the full response
+// message (content and/or tool calls) and usage.
+func (c *Client) ChatCompletionRaw(ctx context.Context, model string, messages []Message, opts ChatOptions) (Message, Usage, error) {
 	payload, err := json.Marshal(buildChatRequest(model, messages, opts, false))
 	if err != nil {
-		return "", Usage{}, err
+		return Message{}, Usage{}, err
 	}
 	req, err := c.newRequest(ctx, "POST", "/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		return "", Usage{}, err
+		return Message{}, Usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return "", Usage{}, err
+		return Message{}, Usage{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", Usage{}, apiError(resp)
+		return Message{}, Usage{}, apiError(resp)
 	}
 
 	var result struct {
@@ -239,12 +287,21 @@ func (c *Client) ChatCompletion(ctx context.Context, model string, messages []Me
 		Usage Usage `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", Usage{}, err
+		return Message{}, Usage{}, err
 	}
 	if len(result.Choices) == 0 {
-		return "", result.Usage, nil
+		return Message{}, result.Usage, nil
 	}
-	return result.Choices[0].Message.Content, result.Usage, nil
+	return result.Choices[0].Message, result.Usage, nil
+}
+
+// ChatCompletion sends a non-streaming chat request and returns the response content and usage.
+func (c *Client) ChatCompletion(ctx context.Context, model string, messages []Message, opts ChatOptions) (string, Usage, error) {
+	msg, usage, err := c.ChatCompletionRaw(ctx, model, messages, opts)
+	if err != nil {
+		return "", Usage{}, err
+	}
+	return msg.Content, usage, nil
 }
 
 // ChatStream reads a server-sent-events streaming response.

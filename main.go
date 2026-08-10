@@ -110,6 +110,7 @@ func main() {
 		envName        string
 		verbose        bool
 		stats          bool
+		harness        bool
 	)
 
 	// Pre-scan for -e so LoadConfig can select the right environment
@@ -171,6 +172,8 @@ func main() {
 	flag.BoolVar(&verbose, "verbose", false, "verbose: log HTTP requests and responses to stderr")
 	flag.BoolVar(&stats, "stat", false, "print token usage and performance stats after each response")
 	flag.BoolVar(&stats, "stats", false, "print token usage and performance stats after each response")
+	flag.BoolVar(&harness, "H", false, "harness mode: interactive REPL where the model can execute shell commands (DANGEROUS: no confirmation)")
+	flag.BoolVar(&harness, "harness", false, "harness mode: interactive REPL where the model can execute shell commands (DANGEROUS: no confirmation)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: goshai [flags] [prompt...]\n\n")
@@ -198,6 +201,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -r, -rename <name>  rename 'last' session to a new name\n")
 		fmt.Fprintf(os.Stderr, "  -S, -sessions       list available sessions\n")
 		fmt.Fprintf(os.Stderr, "  -G, -gen-prompt     generate reusable prompt from session history\n")
+		fmt.Fprintf(os.Stderr, "  -H, -harness        harness mode: interactive REPL, model can run shell commands (DANGEROUS)\n")
 		fmt.Fprintf(os.Stderr, "\nCurrent configuration:\n")
 		fmt.Fprintf(os.Stderr, "  config:  %s\n", configFilePath(dir, "config.yaml"))
 		fmt.Fprintf(os.Stderr, "  prompts: %s\n", configFilePath(dir, "prompts.yaml"))
@@ -504,10 +508,13 @@ func main() {
 		}
 	}
 
-	if len(files) == 0 && userPrompt == "" {
+	// Harness mode is interactive: an initial prompt is optional, it just seeds
+	// the REPL's first turn.
+	if !harness && len(files) == 0 && userPrompt == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
+	hasInitialPrompt := len(files) > 0 || userPrompt != ""
 
 	systemPrompt := prompts[promptName]
 	if promptName != "default" && systemPrompt == "" {
@@ -528,17 +535,32 @@ func main() {
 		if len(messages) == 0 && systemPrompt != "" {
 			messages = append(messages, Message{Role: RoleSystem, Content: systemPrompt})
 		}
-		userMsg, err := buildUserMessage(files, userPrompt)
-		if err != nil {
-			log.Fatal(err)
+		if hasInitialPrompt {
+			userMsg, err := buildUserMessage(files, userPrompt)
+			if err != nil {
+				log.Fatal(err)
+			}
+			messages = append(messages, userMsg)
 		}
-		messages = append(messages, userMsg)
+	} else if harness && !hasInitialPrompt {
+		// Fresh harness REPL with no initial prompt: seed only the system message.
+		if systemPrompt != "" {
+			messages = []Message{{Role: RoleSystem, Content: systemPrompt}}
+		}
 	} else {
 		// No session flag: start fresh, will be saved to "last".
 		messages, err = BuildMessages(systemPrompt, files, userPrompt)
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	if harness {
+		opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget, Stats: stats}
+		if err := RunHarness(context.Background(), client, model, messages, opts, saveAs); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 
 	opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget, Stats: stats}
