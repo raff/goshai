@@ -135,6 +135,22 @@ func printModelList(ctx context.Context, client *Client, w io.Writer) error {
 	return nil
 }
 
+// printSessionList prints all saved sessions with their message count and last-modified time.
+func printSessionList(w io.Writer) error {
+	sessions, err := ListSessions()
+	if err != nil {
+		return err
+	}
+	if len(sessions) == 0 {
+		fmt.Fprintln(w, "(no sessions saved)")
+		return nil
+	}
+	for _, s := range sessions {
+		fmt.Fprintf(w, "  %-20s  %3d messages  %s\n", s.Name, s.Messages, s.Modified.Format("2006-01-02 15:04"))
+	}
+	return nil
+}
+
 func main() {
 	var (
 		files          multiFlag
@@ -341,16 +357,8 @@ func main() {
 	}
 
 	if listSessions {
-		sessions, err := ListSessions()
-		if err != nil {
+		if err := printSessionList(os.Stdout); err != nil {
 			log.Fatal("sessions error: ", err)
-		}
-		if len(sessions) == 0 {
-			fmt.Println("(no sessions saved)")
-			return
-		}
-		for _, s := range sessions {
-			fmt.Printf("  %-20s  %3d messages  %s\n", s.Name, s.Messages, s.Modified.Format("2006-01-02 15:04"))
 		}
 		return
 	}

@@ -26,7 +26,7 @@ func RunChat(ctx context.Context, client *Client, model string, messages []Messa
 
 	var total Usage
 	var requests int
-	rc := &replCommands{ctx: ctx, client: client, model: &model, opts: &opts, messages: &messages, total: &total, requests: &requests, saveAs: saveAs}
+	rc := &replCommands{ctx: ctx, client: client, model: &model, opts: &opts, messages: &messages, total: &total, requests: &requests, saveAs: &saveAs}
 
 	for pending || (repl && scanner.Scan()) {
 		if !pending {

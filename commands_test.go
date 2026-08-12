@@ -19,7 +19,8 @@ func TestIsCommand(t *testing.T) {
 		{"/reset", true},
 		{"/help", true},
 		{"/undo", true},
-		{"/save mysession", true},
+		{"/session list", true},
+		{"/sessions load foo", true},
 		{"/thinking on", true},
 		{"/history", true},
 		{"/messages", true},
@@ -37,6 +38,7 @@ func TestIsCommand(t *testing.T) {
 
 func newTestReplCommands(messages *[]Message, opts *ChatOptions) *replCommands {
 	model := "gpt-4o"
+	saveAs := ""
 	var total Usage
 	var requests int
 	return &replCommands{
@@ -47,6 +49,7 @@ func newTestReplCommands(messages *[]Message, opts *ChatOptions) *replCommands {
 		messages: messages,
 		total:    &total,
 		requests: &requests,
+		saveAs:   &saveAs,
 	}
 }
 
@@ -155,29 +158,67 @@ func TestCmdUndo(t *testing.T) {
 	}
 }
 
-func TestCmdSave(t *testing.T) {
+func TestCmdSessionSave(t *testing.T) {
 	setTempConfigHome(t)
 	messages := []Message{{Role: RoleUser, Content: "hi"}, {Role: RoleAssistant, Content: "hello"}}
 	rc := newTestReplCommands(&messages, &ChatOptions{})
-	rc.saveAs = "default-session"
+	*rc.saveAs = "default-session"
 
-	rc.dispatch("/save")
+	rc.dispatch("/session save")
 	saved, err := LoadSession("default-session")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(saved) != 2 {
-		t.Fatalf("expected /save with no args to save to default session, got %+v", saved)
+		t.Fatalf("expected /session save with no args to save to the active session, got %+v", saved)
 	}
 
-	rc.dispatch("/save named-session")
+	rc.dispatch("/session save named-session")
 	saved, err = LoadSession("named-session")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(saved) != 2 {
-		t.Fatalf("expected /save <name> to save under that name, got %+v", saved)
+		t.Fatalf("expected /session save <name> to save under that name, got %+v", saved)
 	}
+	if *rc.saveAs != "named-session" {
+		t.Fatalf("expected /session save <name> to switch the active session, got %q", *rc.saveAs)
+	}
+}
+
+func TestCmdSessionLoad(t *testing.T) {
+	setTempConfigHome(t)
+	if err := SaveSession("other-session", []Message{{Role: RoleUser, Content: "prior"}, {Role: RoleAssistant, Content: "reply"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := []Message{{Role: RoleSystem, Content: "sys"}}
+	rc := newTestReplCommands(&messages, &ChatOptions{})
+	*rc.saveAs = "default-session"
+
+	rc.dispatch("/session load other-session")
+	if len(messages) != 2 || messages[0].Content != "prior" {
+		t.Fatalf("expected messages replaced with loaded session, got %+v", messages)
+	}
+	if *rc.saveAs != "other-session" {
+		t.Fatalf("expected /session load to switch the active session, got %q", *rc.saveAs)
+	}
+
+	// loading a nonexistent session should leave state untouched.
+	rc.dispatch("/session load does-not-exist")
+	if len(messages) != 2 || *rc.saveAs != "other-session" {
+		t.Fatalf("expected no change after loading a missing session, got messages=%+v saveAs=%q", messages, *rc.saveAs)
+	}
+}
+
+func TestCmdSessionList(t *testing.T) {
+	setTempConfigHome(t)
+	messages := []Message{}
+	rc := newTestReplCommands(&messages, &ChatOptions{})
+
+	// Should not error even with no sessions saved yet.
+	rc.dispatch("/session list")
+	rc.dispatch("/sessions list")
 }
 
 func TestDispatchExit(t *testing.T) {

@@ -398,8 +398,10 @@ While in a REPL (either mode), a line starting with `/` is treated as a command 
 | `/stats on` / `/stats off` | toggle per-request stats mid-session |
 | `/history` (alias `/messages`) | print the full conversation history |
 | `/undo` | remove the last user turn and its reply |
-| `/save` | save the session under its active name |
-| `/save <name>` | save the session under a given name |
+| `/session list` (alias `/sessions`) | list saved sessions |
+| `/session load <name>` | replace the current conversation with a saved session, and make it the active session |
+| `/session save` | save the session under its active name |
+| `/session save <name>` | save the session under a given name, and make it the active session |
 | `/reset` | clear conversation history back to just the system prompt |
 | `/help` | list available commands |
 | `/exit` (alias `/quit`) | leave the REPL |

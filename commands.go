@@ -19,7 +19,7 @@ type replCommands struct {
 	messages *[]Message
 	total    *Usage
 	requests *int
-	saveAs   string // default session name for /save with no argument
+	saveAs   *string // active session name; read/written by /session save|load
 }
 
 // commandHelp lists the recognized commands and their descriptions, in display order.
@@ -33,7 +33,7 @@ var commandHelp = []struct {
 	{"stats", "print running session token totals; /stats on|off toggles per-request stats"},
 	{"history", "print the full conversation history (alias: /messages)"},
 	{"undo", "remove the last user turn and its reply"},
-	{"save", "save the session; /save <name> saves under a name (default: active session)"},
+	{"session", "manage sessions: /session list | load <name> | save [name]"},
 	{"reset", "clear conversation history back to just the system prompt"},
 	{"help", "list available commands"},
 	{"exit", "leave the REPL (alias: /quit)"},
@@ -44,6 +44,7 @@ var commandAliases = map[string]string{
 	"stat":     "stats",
 	"messages": "history",
 	"quit":     "exit",
+	"sessions": "session",
 }
 
 // canonicalCommand resolves a possibly-aliased command name to its canonical form.
@@ -68,6 +69,16 @@ func splitCommand(input string) (name, rest string) {
 		rest = strings.TrimSpace(parts[1])
 	}
 	return name, rest
+}
+
+// splitArgs splits "word rest..." into its first word and the trimmed remainder.
+func splitArgs(s string) (first, rest string) {
+	parts := strings.SplitN(strings.TrimSpace(s), " ", 2)
+	first = parts[0]
+	if len(parts) > 1 {
+		rest = strings.TrimSpace(parts[1])
+	}
+	return first, rest
 }
 
 // isCommand reports whether input's command name matches a known REPL command.
@@ -103,8 +114,8 @@ func (r *replCommands) dispatch(input string) (quit bool) {
 		r.cmdHistory()
 	case "undo":
 		r.cmdUndo()
-	case "save":
-		r.cmdSave(rest)
+	case "session":
+		r.cmdSession(rest)
 	case "reset":
 		r.cmdReset()
 	case "help":
@@ -233,19 +244,56 @@ func (r *replCommands) cmdUndo() {
 	fmt.Fprintf(os.Stderr, "removed last turn (%d message(s))\n", removed)
 }
 
-func (r *replCommands) cmdSave(rest string) {
-	name := rest
+func (r *replCommands) cmdSession(rest string) {
+	sub, arg := splitArgs(rest)
+	switch sub {
+	case "list":
+		if err := printSessionList(os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "sessions error: %v\n", err)
+		}
+	case "load":
+		r.cmdSessionLoad(arg)
+	case "save":
+		r.cmdSessionSave(arg)
+	default:
+		fmt.Fprintln(os.Stderr, "usage: /session list | load <name> | save [name]")
+	}
+}
+
+func (r *replCommands) cmdSessionLoad(name string) {
 	if name == "" {
-		name = r.saveAs
+		fmt.Fprintln(os.Stderr, "usage: /session load <name>")
+		return
+	}
+	if path, err := sessionPath(name); err == nil {
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			fmt.Fprintf(os.Stderr, "session %q not found\n", name)
+			return
+		}
+	}
+	messages, err := LoadSession(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load error: %v\n", err)
+		return
+	}
+	*r.messages = messages
+	*r.saveAs = name
+	fmt.Fprintf(os.Stderr, "loaded session %q (%d message(s))\n", name, len(messages))
+}
+
+func (r *replCommands) cmdSessionSave(name string) {
+	if name == "" {
+		name = *r.saveAs
 	}
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "usage: /save <name> (no active session to save to)")
+		fmt.Fprintln(os.Stderr, "usage: /session save <name> (no active session to save to)")
 		return
 	}
 	if err := SaveSession(name, *r.messages); err != nil {
 		fmt.Fprintf(os.Stderr, "save error: %v\n", err)
 		return
 	}
+	*r.saveAs = name
 	fmt.Fprintf(os.Stderr, "session saved as %q\n", name)
 }
 
