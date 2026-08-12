@@ -26,7 +26,7 @@ func RunChat(ctx context.Context, client *Client, model string, messages []Messa
 
 	var total Usage
 	var requests int
-	rc := &replCommands{ctx: ctx, client: client, model: &model, opts: &opts, messages: &messages, total: &total, requests: &requests}
+	rc := &replCommands{ctx: ctx, client: client, model: &model, opts: &opts, messages: &messages, total: &total, requests: &requests, saveAs: saveAs}
 
 	for pending || (repl && scanner.Scan()) {
 		if !pending {
@@ -36,7 +36,9 @@ func RunChat(ctx context.Context, client *Client, model string, messages []Messa
 				continue
 			}
 			if isCommand(input) {
-				rc.dispatch(input)
+				if rc.dispatch(input) {
+					return nil
+				}
 				if saveAs != "" {
 					if err := SaveSession(saveAs, messages); err != nil {
 						fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)

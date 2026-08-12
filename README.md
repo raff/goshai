@@ -389,12 +389,20 @@ While in a REPL (either mode), a line starting with `/` is treated as a command 
 | `/model` | show the current model |
 | `/model <name>` | switch models for subsequent turns (alias or fuzzy match, same as `-m`) |
 | `/model list` | list models available on the server |
-| `/stats` | print running session token totals |
-| `/stats on` / `/stats off` | toggle per-request stats mid-session |
 | `/system` | show the current system prompt |
 | `/system <text>` | replace the system prompt for the rest of the session |
+| `/thinking` | show whether extended thinking is on and its token budget |
+| `/thinking on` / `/thinking off` | toggle extended thinking mid-session |
+| `/thinking <N>` | enable extended thinking with a specific token budget |
+| `/stats` | print running session token totals |
+| `/stats on` / `/stats off` | toggle per-request stats mid-session |
+| `/history` (alias `/messages`) | print the full conversation history |
+| `/undo` | remove the last user turn and its reply |
+| `/save` | save the session under its active name |
+| `/save <name>` | save the session under a given name |
 | `/reset` | clear conversation history back to just the system prompt |
 | `/help` | list available commands |
+| `/exit` (alias `/quit`) | leave the REPL |
 
 ## Harness mode
 
