@@ -380,6 +380,22 @@ Both plain chat and harness mode (`-H`) share the same rule for whether to start
     echo "what's the capital of France?" | goshai
 ```
 
+### REPL commands
+
+While in a REPL (either mode), a line starting with `/` is treated as a command instead of being sent to the model:
+
+| Command | Effect |
+| --- | --- |
+| `/model` | show the current model |
+| `/model <name>` | switch models for subsequent turns (alias or fuzzy match, same as `-m`) |
+| `/model list` | list models available on the server |
+| `/stats` | print running session token totals |
+| `/stats on` / `/stats off` | toggle per-request stats mid-session |
+| `/system` | show the current system prompt |
+| `/system <text>` | replace the system prompt for the rest of the session |
+| `/reset` | clear conversation history back to just the system prompt |
+| `/help` | list available commands |
+
 ## Harness mode
 
 `-H`/`-harness` uses the same REPL/one-shot rule above, except the model can call a `sh` tool to run shell commands on your machine, see their output, and keep reasoning — looping through as many commands as it wants — before printing a plain-text reply.

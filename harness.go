@@ -78,11 +78,22 @@ func RunHarness(ctx context.Context, client *Client, model string, messages []Me
 
 	var total Usage
 	var requests int
+	rc := &replCommands{ctx: ctx, client: client, model: &model, opts: &opts, messages: &messages, total: &total, requests: &requests}
 
 	for pending || (repl && scanner.Scan()) {
 		if !pending {
 			input := scanner.Text()
 			if strings.TrimSpace(input) == "" {
+				fmt.Print("> ")
+				continue
+			}
+			if isCommand(input) {
+				rc.dispatch(input)
+				if saveAs != "" {
+					if err := SaveSession(saveAs, messages); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
+					}
+				}
 				fmt.Print("> ")
 				continue
 			}

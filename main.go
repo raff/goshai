@@ -92,6 +92,49 @@ func fuzzyMatchModel(ctx context.Context, client *Client, serverURL, input strin
 	return candidates[0], true
 }
 
+// resolveModelName resolves a user-supplied model name via configured aliases
+// first, then falls back to a fuzzy match against the server's model list.
+// Returns name unchanged if neither resolves it.
+func resolveModelName(ctx context.Context, client *Client, name string) string {
+	if aliases, err := LoadAliases(); err == nil {
+		if full, ok := aliases[name]; ok {
+			return full
+		}
+	}
+	if resolved, ok := fuzzyMatchModel(ctx, client, client.BaseURL, name); ok {
+		return resolved
+	}
+	return name
+}
+
+// printModelList fetches the available models from the server and prints them,
+// annotating any that have a configured alias.
+func printModelList(ctx context.Context, client *Client, w io.Writer) error {
+	modelInfos, err := client.ListModels(ctx)
+	if err != nil {
+		return err
+	}
+	reverseAliases := map[string]string{}
+	if aliases, err := LoadAliases(); err == nil {
+		for alias, full := range aliases {
+			reverseAliases[full] = alias
+		}
+	}
+	ids := make([]string, 0, len(modelInfos))
+	for _, m := range modelInfos {
+		ids = append(ids, m.ID)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if alias, ok := reverseAliases[id]; ok {
+			fmt.Fprintf(w, "  %s (%s)\n", id, alias)
+		} else {
+			fmt.Fprintln(w, " ", id)
+		}
+	}
+	return nil
+}
+
 func main() {
 	var (
 		files          multiFlag
@@ -427,28 +470,8 @@ func main() {
 	client := NewClient(serverURL, token, verbose)
 
 	if listModels {
-		modelInfos, err := client.ListModels(context.Background())
-		if err != nil {
+		if err := printModelList(context.Background(), client, os.Stdout); err != nil {
 			log.Fatal("models error: ", err)
-		}
-		// Build reverse map: full model ID → alias name
-		reverseAliases := map[string]string{}
-		if aliases, err := LoadAliases(); err == nil {
-			for alias, full := range aliases {
-				reverseAliases[full] = alias
-			}
-		}
-		ids := make([]string, 0, len(modelInfos))
-		for _, m := range modelInfos {
-			ids = append(ids, m.ID)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			if alias, ok := reverseAliases[id]; ok {
-				fmt.Printf("  %s (%s)\n", id, alias)
-			} else {
-				fmt.Println(" ", id)
-			}
 		}
 		return
 	}
