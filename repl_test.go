@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +72,67 @@ func TestRunHarness_oneShot(t *testing.T) {
 	}
 	if saved[1].Role != RoleAssistant || saved[1].Content != "no tools needed" {
 		t.Fatalf("unexpected assistant message: %+v", saved[1])
+	}
+}
+
+// withStdin temporarily replaces os.Stdin with a pipe fed by the given lines
+// (newline-terminated), restoring the original on test cleanup.
+func withStdin(t *testing.T, lines ...string) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = orig })
+
+	go func() {
+		for _, line := range lines {
+			fmt.Fprintln(w, line)
+		}
+		w.Close()
+	}()
+}
+
+// TestRunChat_replExpandsInlineFileRef verifies that a "@file" reference typed
+// as a REPL follow-up turn (not just the initial prompt) is expanded to the
+// file's contents before being sent to the model.
+func TestRunChat_replExpandsInlineFileRef(t *testing.T) {
+	setTempConfigHome(t)
+	path := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(path, []byte("hello from file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var lastUserContent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		if n := len(req.Messages); n > 0 {
+			lastUserContent = req.Messages[n-1].Content
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	t.Cleanup(srv.Close)
+	client := NewClient(srv.URL, "", false)
+
+	withStdin(t, "@"+path+" summarize this")
+
+	if err := RunChat(context.Background(), client, "test-model", nil, ChatOptions{}, "", true, true); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(lastUserContent, "hello from file") {
+		t.Fatalf("expected @file reference expanded into the request, got: %q", lastUserContent)
+	}
+	if strings.Contains(lastUserContent, "@"+path) {
+		t.Fatalf("expected @path token replaced, still present in: %q", lastUserContent)
 	}
 }

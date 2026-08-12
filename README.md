@@ -273,6 +273,7 @@ Resolution rules:
 - Use `@"path with spaces.txt"` for paths containing spaces, or whenever you want the path boundary to be explicit.
 - If the path does not resolve to an existing file, the original `@token` is left as literal prompt text.
 - Text files become fenced code blocks; image files become `image_url` parts, the same as with `-f`.
+- `@filename` works in every REPL turn, not just the initial prompt — type it directly at the `>` prompt. The `-f` flag only applies to the initial prompt, since it's a command-line flag.
 
 Text files passed via `-f` are embedded as fenced code blocks:
 

@@ -47,7 +47,13 @@ func RunChat(ctx context.Context, client *Client, model string, messages []Messa
 				fmt.Print("> ")
 				continue
 			}
-			messages = append(messages, Message{Role: RoleUser, Content: input})
+			userMsg, err := buildUserMessage(nil, input)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				fmt.Print("> ")
+				continue
+			}
+			messages = append(messages, userMsg)
 		}
 		pending = false
 
