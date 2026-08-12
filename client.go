@@ -212,6 +212,13 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// Add accumulates another request's token counts into u.
+func (u *Usage) Add(other Usage) {
+	u.PromptTokens += other.PromptTokens
+	u.CompletionTokens += other.CompletionTokens
+	u.TotalTokens += other.TotalTokens
+}
+
 // ChatOptions holds optional per-request parameters.
 type ChatOptions struct {
 	Think          bool

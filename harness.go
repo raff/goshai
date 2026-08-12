@@ -76,6 +76,9 @@ func RunHarness(ctx context.Context, client *Client, model string, messages []Me
 		fmt.Print("> ")
 	}
 
+	var total Usage
+	var requests int
+
 	for pending || (repl && scanner.Scan()) {
 		if !pending {
 			input := scanner.Text()
@@ -96,10 +99,16 @@ func RunHarness(ctx context.Context, client *Client, model string, messages []Me
 			}
 			messages = append(messages, reply)
 
+			total.Add(usage)
+			requests++
+
 			if len(reply.ToolCalls) == 0 {
 				fmt.Println(reply.Content)
 				if opts.Stats {
 					printStats(os.Stderr, usage, elapsed, 0)
+					if repl {
+						printTotalStats(os.Stderr, total, requests)
+					}
 				}
 				break
 			}

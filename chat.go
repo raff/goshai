@@ -24,6 +24,9 @@ func RunChat(ctx context.Context, client *Client, model string, messages []Messa
 		fmt.Print("> ")
 	}
 
+	var total Usage
+	var requests int
+
 	for pending || (repl && scanner.Scan()) {
 		if !pending {
 			input := scanner.Text()
@@ -35,11 +38,17 @@ func RunChat(ctx context.Context, client *Client, model string, messages []Messa
 		}
 		pending = false
 
-		content, err := runChatTurn(ctx, client, model, messages, opts, noStream)
+		content, usage, err := runChatTurn(ctx, client, model, messages, opts, noStream)
 		if err != nil {
 			return err
 		}
 		messages = append(messages, Message{Role: RoleAssistant, Content: content})
+
+		total.Add(usage)
+		requests++
+		if opts.Stats && repl {
+			printTotalStats(os.Stderr, total, requests)
+		}
 
 		if saveAs != "" {
 			if err := SaveSession(saveAs, messages); err != nil {
@@ -57,25 +66,25 @@ func RunChat(ctx context.Context, client *Client, model string, messages []Messa
 	return scanner.Err()
 }
 
-// runChatTurn sends messages to the model and prints the reply, returning its content.
-func runChatTurn(ctx context.Context, client *Client, model string, messages []Message, opts ChatOptions, noStream bool) (string, error) {
+// runChatTurn sends messages to the model and prints the reply, returning its content and usage.
+func runChatTurn(ctx context.Context, client *Client, model string, messages []Message, opts ChatOptions, noStream bool) (string, Usage, error) {
 	start := time.Now()
 
 	if noStream {
 		content, usage, err := client.ChatCompletion(ctx, model, messages, opts)
 		if err != nil {
-			return "", fmt.Errorf("API error: %w", err)
+			return "", Usage{}, fmt.Errorf("API error: %w", err)
 		}
 		fmt.Println(content)
 		if opts.Stats {
 			printStats(os.Stderr, usage, time.Since(start), 0)
 		}
-		return content, nil
+		return content, usage, nil
 	}
 
 	stream, err := client.ChatCompletionStream(ctx, model, messages, opts)
 	if err != nil {
-		return "", fmt.Errorf("API error: %w", err)
+		return "", Usage{}, fmt.Errorf("API error: %w", err)
 	}
 	defer stream.Close()
 
@@ -87,7 +96,7 @@ func runChatTurn(ctx context.Context, client *Client, model string, messages []M
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("stream error: %w", err)
+			return "", Usage{}, fmt.Errorf("stream error: %w", err)
 		}
 		if ttft == 0 && chunk != "" {
 			ttft = time.Since(start)
@@ -100,5 +109,5 @@ func runChatTurn(ctx context.Context, client *Client, model string, messages []M
 	if opts.Stats {
 		printStats(os.Stderr, stream.Usage, time.Since(start), ttft)
 	}
-	return sb.String(), nil
+	return sb.String(), stream.Usage, nil
 }

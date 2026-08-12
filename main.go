@@ -197,7 +197,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -E, -envs           list configured environments\n")
 		fmt.Fprintf(os.Stderr, "  -D, -set-default <name>  set the default environment\n")
 		fmt.Fprintf(os.Stderr, "  -v, -verbose        log HTTP requests and responses to stderr\n")
-		fmt.Fprintf(os.Stderr, "  -stat, -stats       print token usage and performance stats\n")
+		fmt.Fprintf(os.Stderr, "  -stat, -stats       print token usage and performance stats (in REPL, also running session totals)\n")
 		fmt.Fprintf(os.Stderr, "  -P, -prompts        list available named prompts\n")
 		fmt.Fprintf(os.Stderr, "  -M, -models         list available models (requires server URL)\n")
 		fmt.Fprintf(os.Stderr, "  -A, -aliases        list model aliases\n")
@@ -599,4 +599,11 @@ func printStats(w io.Writer, u Usage, elapsed, ttft time.Duration) {
 		fmt.Fprintf(w, "  tps=%.1f", tps)
 	}
 	fmt.Fprintln(w)
+}
+
+// printTotalStats prints the running grand total of token usage across a REPL
+// session, summed over n API requests.
+func printTotalStats(w io.Writer, u Usage, n int) {
+	fmt.Fprintf(w, "  session:  requests=%d  prompt=%d  completion=%d  total=%d\n",
+		n, u.PromptTokens, u.CompletionTokens, u.TotalTokens)
 }

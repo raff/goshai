@@ -397,7 +397,7 @@ Both plain chat and harness mode (`-H`) share the same rule for whether to start
     # Continue (or start) a named session in harness mode
     goshai -H -s deploy-task
 
-    # Print token usage after each turn
+    # Print token usage after each turn (in REPL mode, also a running session total)
     goshai -H -stats
 ```
 
