@@ -10,7 +10,8 @@ goshai/
 ├── config.go    — Config and Prompts types, YAML loading
 ├── prompt.go    — BuildMessages: assembles API messages; handles text files, images, and @filename inline refs
 ├── session.go   — session load/save/list/rename, stored in ~/.config/goshai/sessions/
-└── harness.go   — harness mode: interactive REPL where the model can call a shell tool
+├── chat.go      — plain chat REPL / one-shot turn (no tools)
+└── harness.go   — harness mode: same REPL/one-shot shape, but the model can call a shell tool
 ```
 
 ### `config.go`
@@ -94,25 +95,35 @@ Session files intentionally store the full API conversation so follow-up turns c
    b. Fuzzy match fallback — only when `-m` was explicitly passed *and* alias lookup did not resolve it: creates a temporary client, calls `ListModels`, and finds the best match (exact → prefix → substring, case-insensitive, sorted; warns if ambiguous). Skipped when model came from config default to avoid a network call on every invocation.
 7. If `-G`: loads session (named or `last`), strips file blocks, calls the model non-streaming with a meta-prompt, prints generated prompt and exits
 8. Resolves user prompt: positional args → joined string; no args + piped stdin → `io.ReadAll(os.Stdin)`
-9. Assembles messages: loads named session history if `-s` given, otherwise builds fresh via `BuildMessages`
-10. Creates a `Client` with `NewClient(serverURL, token)` and a `ChatOptions` from the merged `thinking` / `thinkingBudget` values
-11. If `-n`/`-no-stream` (or `nostream: true` in config): calls `client.ChatCompletion` and prints the full response
-12. Otherwise: calls `client.ChatCompletionStream` and prints each delta as it arrives
-13. Appends the assistant reply and saves the session (to the named session or `last`)
+9. Computes `hasInitialPrompt` (files or a resolved user prompt) and `interactiveStdin` (`os.Stdin.Stat()` reports a char device). With neither a prompt nor a terminal there's nothing to do, so it prints usage and exits. `repl := !hasInitialPrompt && interactiveStdin` — the REPL only runs when nothing was supplied up front and more input can be read from a terminal; a prompt given via args or piped stdin always means exactly one answer
+10. Assembles messages: loads named session history if `-s` given; with no session and no initial prompt, seeds only the system message (leaving the trailing user message for the REPL loop to fill in); otherwise builds fresh via `BuildMessages`
+11. Creates a `Client` with `NewClient(serverURL, token)` and a `ChatOptions` from the merged `thinking` / `thinkingBudget` values
+12. If `-H`/`-harness`: calls `RunHarness(ctx, client, model, messages, opts, saveAs, repl)`
+13. Otherwise: calls `RunChat(ctx, client, model, messages, opts, saveAs, repl, noStream)`
 
-If `-H`/`-harness` is set, step 9's message assembly still runs (an initial prompt, if any, seeds the first turn; with no prompt and no session, only the system message is kept — the empty trailing user message `buildUserMessage` would otherwise produce is skipped), then control passes to `RunHarness` instead of steps 10–13.
+Both `RunChat` and `RunHarness` handle streaming/non-streaming, printing, and session saving themselves — `main.go` no longer does the response loop inline.
+
+### `chat.go`
+
+`RunChat(ctx, client, model, messages, opts, saveAs, repl, noStream)` implements plain chat (no tools):
+
+1. If `messages` already ends with an unanswered user message (initial prompt or piped stdin from `main.go`), processes that turn immediately; otherwise, when `repl` is true, prints `"> "` and reads a line from stdin as the next user message (blank lines ignored)
+2. Calls `runChatTurn`, which uses `client.ChatCompletion` (non-streaming) or `client.ChatCompletionStream`, printing the reply as it arrives in the streaming case, and prints stats via `printStats` when requested
+3. Appends the assistant reply, saves the session (if `saveAs` is set)
+4. If `repl` is false, returns immediately after that one turn; otherwise prints `"> "` and loops back to read the next line
 
 ### `harness.go`
 
-`RunHarness(ctx, client, model, messages, opts, saveAs)` implements the harness REPL:
+`RunHarness(ctx, client, model, messages, opts, saveAs, repl)` implements the harness loop, structured the same way as `RunChat` above but with tool support:
 
 1. Sets `opts.Tools = []ToolDef{shellTool}` — a single function tool named `sh` that takes a `command` string parameter
-2. If `messages` already ends with an unanswered user message (initial prompt or piped stdin from `main.go`), processes that turn before reading from stdin; otherwise prints `"> "` and waits
-3. Reads a line from stdin as the next user message (blank lines are ignored)
+2. If `messages` already ends with an unanswered user message, processes that turn before reading from stdin; otherwise, when `repl` is true, prints `"> "` and waits
+3. When `repl` is true, reads a line from stdin as the next user message (blank lines are ignored)
 4. Inner loop: calls `client.ChatCompletionRaw`, appends the assistant reply to history
-   - If the reply has no `ToolCalls`, prints the content, optionally prints stats via the same `printStats` helper `main.go` uses, and breaks out to read the next line
+   - If the reply has no `ToolCalls`, prints the content, optionally prints stats via the same `printStats` helper `main.go` uses, and breaks out
    - Otherwise, for each tool call: parses `{"command": "..."}` from the arguments JSON, runs it with `exec.Command("/bin/sh", "-c", command)`, prints `$ <command>` and the combined output, and appends a `tool`-role message with `exit <code>\n<output>` as content before looping back to call the model again
 5. Saves the session (if `saveAs` is set) after each tool-call round and after each completed turn
+6. If `repl` is false, returns immediately after that one turn's inner loop completes; otherwise prints `"> "` and loops back to read the next line
 
 Non-streaming only: tool calls need a complete response to parse, so harness mode does not use `ChatCompletionStream` regardless of the `-n` flag.
 

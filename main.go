@@ -18,6 +18,13 @@ type multiFlag []string
 func (m *multiFlag) String() string     { return strings.Join(*m, ", ") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
+// isInteractiveStdin reports whether stdin is an interactive terminal (as opposed
+// to a pipe/redirect), used to decide whether to enter REPL mode.
+func isInteractiveStdin() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && (info.Mode()&os.ModeCharDevice) != 0
+}
+
 // getEnvArg get the value of -e/--env from args without parsing all flags
 // (to select the right config environment before flag.Parse).
 func getEnvArg(args []string) string {
@@ -508,13 +515,19 @@ func main() {
 		}
 	}
 
-	// Harness mode is interactive: an initial prompt is optional, it just seeds
-	// the REPL's first turn.
-	if !harness && len(files) == 0 && userPrompt == "" {
+	// An initial prompt (from args, -f, or piped stdin) is optional: without one,
+	// and with an interactive terminal, we drop into a REPL and seed only the
+	// system message. Without one, and without a terminal, there's nothing to do.
+	hasInitialPrompt := len(files) > 0 || userPrompt != ""
+	interactiveStdin := isInteractiveStdin()
+	if !hasInitialPrompt && !interactiveStdin {
 		flag.Usage()
 		os.Exit(1)
 	}
-	hasInitialPrompt := len(files) > 0 || userPrompt != ""
+	// repl is true only when nothing was supplied up front and we can read more
+	// turns from a terminal; a prompt given on the command line (or piped in)
+	// always gets exactly one answer, then the process exits.
+	repl := !hasInitialPrompt && interactiveStdin
 
 	systemPrompt := prompts[promptName]
 	if promptName != "default" && systemPrompt == "" {
@@ -542,8 +555,8 @@ func main() {
 			}
 			messages = append(messages, userMsg)
 		}
-	} else if harness && !hasInitialPrompt {
-		// Fresh harness REPL with no initial prompt: seed only the system message.
+	} else if !hasInitialPrompt {
+		// Fresh REPL with no initial prompt: seed only the system message.
 		if systemPrompt != "" {
 			messages = []Message{{Role: RoleSystem, Content: systemPrompt}}
 		}
@@ -555,66 +568,17 @@ func main() {
 		}
 	}
 
+	opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget, Stats: stats}
+
 	if harness {
-		opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget, Stats: stats}
-		if err := RunHarness(context.Background(), client, model, messages, opts, saveAs); err != nil {
+		if err := RunHarness(context.Background(), client, model, messages, opts, saveAs, repl); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
-	opts := ChatOptions{Think: thinking, ThinkingBudget: thinkingBudget, Stats: stats}
-
-	if noStream {
-		start := time.Now()
-		content, usage, err := client.ChatCompletion(context.Background(), model, messages, opts)
-		elapsed := time.Since(start)
-		if err != nil {
-			log.Fatal("API error: ", err)
-		}
-		fmt.Println(content)
-		if stats {
-			printStats(os.Stderr, usage, elapsed, 0)
-		}
-		messages = append(messages, Message{Role: RoleAssistant, Content: content})
-		if err := SaveSession(saveAs, messages); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
-		}
-		return
-	}
-
-	start := time.Now()
-	stream, err := client.ChatCompletionStream(context.Background(), model, messages, opts)
-	if err != nil {
-		log.Fatal("API error: ", err)
-	}
-	defer stream.Close()
-
-	var sb strings.Builder
-	var ttft time.Duration
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Fatal("stream error: ", err)
-		}
-		if ttft == 0 && chunk != "" {
-			ttft = time.Since(start)
-		}
-		fmt.Print(chunk)
-		sb.WriteString(chunk)
-	}
-	elapsed := time.Since(start)
-	fmt.Println()
-
-	if stats {
-		printStats(os.Stderr, stream.Usage, elapsed, ttft)
-	}
-	messages = append(messages, Message{Role: RoleAssistant, Content: sb.String()})
-	if err := SaveSession(saveAs, messages); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
+	if err := RunChat(context.Background(), client, model, messages, opts, saveAs, repl, noStream); err != nil {
+		log.Fatal(err)
 	}
 }
 

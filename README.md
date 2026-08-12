@@ -14,7 +14,8 @@ A command-line client for interacting with OpenAI-compatible LLM servers (Ollama
 - Non-streaming mode (`-n`) for servers that don't support streaming
 - Extended thinking / reasoning support (`-thinking`) for models that expose it
 - Session history: conversations are saved automatically and can be continued by name
-- Harness mode (`-H`): an interactive REPL where the model can execute shell commands via a tool call, observe the output, and keep going until it produces a plain-text reply
+- Interactive REPL: run `goshai` with no prompt on the command line (and no piped stdin) to chat turn-by-turn; giving a prompt via args or stdin always answers once and exits
+- Harness mode (`-H`): the same REPL, except the model can execute shell commands via a tool call, observe the output, and keep going until it produces a plain-text reply
 - Generate a reusable prompt from any session (`-G`)
 - Named environments in a single config file for switching between servers (`-e`, `-E`)
 - Model aliases: define short names for long model IDs and manage them from the CLI (`-a`, `-A`)
@@ -363,15 +364,31 @@ The model receives the conversation history with all file contents stripped out,
     goshai -f other.go "$(cat my_review_prompt.txt)"
 ```
 
+## Interactive REPL vs. one-shot
+
+Both plain chat and harness mode (`-H`) share the same rule for whether to start an interactive REPL or just answer once and exit:
+
+- **No prompt on the command line, and stdin is a terminal:** drops into a REPL — prints `> `, reads a line, answers, repeats until EOF (Ctrl-D) or the process is killed.
+- **A prompt given as command-line arguments, or piped via stdin:** answers that single prompt and exits — no REPL, regardless of terminal.
+
+```bash
+    # Interactive chat REPL (no args, run from a terminal)
+    goshai
+
+    # One-shot: answers and exits
+    goshai "what's the capital of France?"
+    echo "what's the capital of France?" | goshai
+```
+
 ## Harness mode
 
-`-H`/`-harness` starts an interactive REPL in which the model can call a `sh` tool to run shell commands on your machine, see their output, and keep reasoning — looping through as many commands as it wants — before printing a plain-text reply and waiting for your next line.
+`-H`/`-harness` uses the same REPL/one-shot rule above, except the model can call a `sh` tool to run shell commands on your machine, see their output, and keep reasoning — looping through as many commands as it wants — before printing a plain-text reply.
 
 ```bash
     # Start a fresh harness REPL
     goshai -H
 
-    # Seed the first turn with an initial task, then keep chatting interactively
+    # One-shot: run a task, print the final reply, and exit
     goshai -H "list the go files in this repo and summarize what each one does"
 
     # Use a system prompt tailored for agentic/tool-using tasks

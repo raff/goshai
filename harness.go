@@ -51,9 +51,11 @@ func runShellTool(command string) string {
 	return fmt.Sprintf("exit %d\n%s", exitCode, output)
 }
 
-// RunHarness starts an interactive REPL in which the model can call the "sh" tool
-// to execute shell commands on the local machine, observe their output, and continue
-// reasoning until it produces a plain-text reply.
+// RunHarness runs the harness loop, in which the model can call the "sh" tool to
+// execute shell commands on the local machine, observe their output, and continue
+// reasoning until it produces a plain-text reply. When repl is true, it then reads
+// additional turns from stdin, REPL-style; otherwise it answers the pending turn
+// once and returns.
 //
 // messages seeds the conversation (e.g. a system prompt, and optionally a trailing
 // unanswered user message when an initial prompt or piped stdin was supplied). saveAs,
@@ -61,18 +63,20 @@ func runShellTool(command string) string {
 //
 // WARNING: the model can execute arbitrary shell commands with no confirmation step.
 // Only use harness mode with a trusted model/server.
-func RunHarness(ctx context.Context, client *Client, model string, messages []Message, opts ChatOptions, saveAs string) error {
+func RunHarness(ctx context.Context, client *Client, model string, messages []Message, opts ChatOptions, saveAs string, repl bool) error {
 	opts.Tools = []ToolDef{shellTool}
 
-	fmt.Fprintln(os.Stderr, "harness mode: the model can execute shell commands on this machine without confirmation.")
+	if repl {
+		fmt.Fprintln(os.Stderr, "harness mode: the model can execute shell commands on this machine without confirmation.")
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	pending := len(messages) > 0 && messages[len(messages)-1].Role == RoleUser
-	if !pending {
+	if repl && !pending {
 		fmt.Print("> ")
 	}
 
-	for pending || scanner.Scan() {
+	for pending || (repl && scanner.Scan()) {
 		if !pending {
 			input := scanner.Text()
 			if strings.TrimSpace(input) == "" {
@@ -133,6 +137,10 @@ func RunHarness(ctx context.Context, client *Client, model string, messages []Me
 			if err := SaveSession(saveAs, messages); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not save session: %v\n", err)
 			}
+		}
+
+		if !repl {
+			return nil
 		}
 
 		fmt.Print("> ")
